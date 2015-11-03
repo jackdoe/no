@@ -103,11 +103,11 @@ var time = function() {
 }
 
 var time_inc = function(from) {
-    return from + 10;
+    return from + 1;
 }
 
 var time_dec = function(from) {
-    return from - 10;
+    return from + 1;
 }
 
 function DocumentIdentifier() {
@@ -123,6 +123,10 @@ function DocumentIdentifier() {
             return this.offset - other.offset
         return this.time_id - other.time_id;
     }
+    this.reset = function() {
+        this.time_id = Number.MAX_VALUE;
+        this.offset = Number.MAX_VALUE;
+    }
 }
 
 function Term(tag) {
@@ -133,51 +137,52 @@ function Term(tag) {
     this.time_id = time();
     this.fd = -1;
     this.buffer = new Buffer(4);
+    this.from = undefined;
+    this.to = undefined;
+    this.size = 0;
 
+    this.set_time_id_range = function(from,to) {
+        this.from = parseInt(from) || time();
+        this.time_id = this.from;
+        if (to)
+            this.to = parseInt(to);
+    }
+    this.left = function() { return this.size - this.offset };
     this.reopen_if_needed = function() {
-        if (this.fd > 0 && this.time_id == time())
-            return true;
-
         if (this.fd > 0) {
-            fs.closeSync(this.fd);
-            this.fd = -1;
+            if (this.time_id == time())
+                return true;
+
+            if (this.left() > 0)
+                return true;
+
+            this.size = fs.fstatSync(this.fd).size;
+            if (this.left() > 0)
+                return true;
         }
 
-        if (this.time_id == time()) {
+        var end = this.to || time();
+        var old_time_id = this.time_id;
+        while(this.time_id <= end) {
             var name = fn_for_tag(this.time_id, this.tag);
-            if (this.fd == -1 && fs.existsSync(name)) {
-                this.fd = fs.openSync(name, 'r');
-
-                return true;
-            }
-            return false;
-        }
-
-        var end = time();
-        var i = time_inc(this.time_id);
-        while (i <= end)  {
-            var name = fn_for_tag(i, this.tag);
-
             if (fs.existsSync(name)) {
+                if (this.fd > 0)
+                    fs.closeSync(this.fd);
                 this.fd = fs.openSync(name, 'r');
-                this.offset = 0;
-                this.time_id = i;
-
-                return true;
+                this.size = fs.fstatSync(this.fd).size;
+                if (this.time_id != old_time_id)
+                    this.offset = 0;
+                if (this.left() > 0)
+                    return true;
             }
-
-            i = time_inc(i)
+            this.time_id = time_inc(this.time_id);
         }
-        this.time_id = time_dec(end);
         return false;
     }
 
-
-
     this.next = function () {
         if (this.reopen_if_needed()) {
-            var size = fs.fstatSync(fd).size;
-            if (this.offset <= (size - 4)) {
+            if (this.left() >= 4) {
                 this.buffer.fill(0);
 
                 var n_read = fs.readSync(this.fd,this.buffer,0,4,this.offset);
@@ -189,6 +194,11 @@ function Term(tag) {
                 return this.doc_id;
             }
         }
+
+        if (this.to && this.time_id >= this.to) {
+            this.doc_id.reset();
+            return this.doc_id;
+        }
         return PAUSE;
     }
 }
@@ -199,6 +209,11 @@ function BoolOr() {
 
     this.add = function(query) {
         this.queries.push(query);
+    }
+
+    this.set_time_id_range = function(from,to) {
+        for(var i = 0; i < this.queries.length; i++)
+            this.queries[i].set_time_id_range(from,to);
     }
 
     this.next = function () {
@@ -235,6 +250,10 @@ function BoolAnd() {
 
     this.add = function(query) {
         this.or.add(query);
+    }
+
+    this.set_time_id_range = function(from,to) {
+        this.or.set_time_id_range(from,to);
     }
 
     this.next = function () {
@@ -297,31 +316,36 @@ var searcher = http.createServer(function (request, response) {
         'Connection': 'keep-alive',
         'Cache-Control': 'no-cache',
     });
+    var url_parts = url.parse(request.url, true);
+    var qs = url_parts.query;
 
     var body = '';
     request.on('data', function (data) { body += data; });
     var done = false;
-    var buf = new Buffer(1);
-    buf.fill(0);
     var i;
     request.on('end', function () {
         obj = JSON.parse(body);
         var q = parse(obj);
+        q.set_time_id_range(qs.from,qs.to);
         console.log(q);
         var i = setInterval(function() {
             var n;
-            var n_without_pause = 0;
             do {
                 var n = q.next()
+                if (n.time_id == Number.MAX_VALUE) {
+                    response.end();
+                    timers.clearInterval(i);
+                    break;
+                }
+
                 if (n != PAUSE) {
                     var time_id = n.time_id;
                     var offset = n.offset;
-                    n_without_pause++;
                     response.write(get_store_obj(time_id).get(offset));
                 }
             } while(n != PAUSE);
-            response.write(buf);
         },1000);
+
         response.on('end', function() {
             timers.clearInterval(i);
         })
