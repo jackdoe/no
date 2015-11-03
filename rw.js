@@ -133,7 +133,7 @@ function Term(tag) {
     this.reopen_if_needed = function() {
         if (this.fd > 0 && this.time_id == time())
             return true;
-        
+
         if (this.fd > 0) {
             fs.closeSync(this.fd);
             this.fd = -1;
@@ -143,7 +143,7 @@ function Term(tag) {
             var name = fn_for_tag(this.time_id, this.tag);
             if (this.fd == -1 && fs.existsSync(name)) {
                 this.fd = fs.openSync(name, 'r');
-                
+
                 return true;
             }
             return false;
@@ -174,7 +174,7 @@ function Term(tag) {
             var size = fs.fstatSync(fd).size;
             if (this.offset <= (size - 4)) {
                 this.buffer.fill(0);
-                
+
                 var n_read = fs.readSync(this.fd,this.buffer,0,4,this.offset);
                 if (n_read != 4) throw(new Error("failed to read 4 bytes, got:" + n_read + " size: " + size + " at offset: " + this.offset));
 
@@ -192,7 +192,7 @@ function Term(tag) {
 function BoolOr() {
     this.queries = [];
     this.doc_id = new DocumentIdentifier();
-    
+
     this.add = function(query) {
         this.queries.push(query);
     }
@@ -219,7 +219,7 @@ function BoolOr() {
 function BoolAnd() {
     this.or = new BoolOr();
     this.doc_id = new DocumentIdentifier();
-    
+
     this.add = function(query) {
         this.or.add(query);
     }
@@ -299,7 +299,7 @@ var searcher = http.createServer(function (request, response) {
             var n;
             var n_without_pause = 0;
             do {
-                var n = q.next() 
+                var n = q.next()
                 if (n != PAUSE) {
                     var time_id = n.time_id;
                     var offset = n.offset;
@@ -307,7 +307,7 @@ var searcher = http.createServer(function (request, response) {
                     response.write(get_store_obj(time_id).get(offset));
                 }
             } while(n != PAUSE);
-            
+
             response.write(buf);
         },1000);
         response.on('end', function() {
@@ -347,4 +347,3 @@ console.log("running on 8000 and 8001 and 8002 for udp");
 setInterval(function() {
     console.log("written so far: " + COUNTER);
 },1000);
-
