@@ -13,6 +13,10 @@ var COUNTER = 0;
 var NAME_TO_STORE = {}
 var ROOT = "/tmp/messages/";
 var PAUSE = -1;
+var WRITER_PORT = 8000;
+var WRITER_UDP_PORT = 8002;
+var SEARCHER_PORT = 8001;
+
 
 function Store(time_id) {
     this.time_id = time_id;
@@ -168,8 +172,9 @@ function Term(tag) {
         return false;
     }
 
-    this.next = function () {
 
+
+    this.next = function () {
         if (this.reopen_if_needed()) {
             var size = fs.fstatSync(fd).size;
             if (this.offset <= (size - 4)) {
@@ -184,7 +189,6 @@ function Term(tag) {
                 return this.doc_id;
             }
         }
-
         return PAUSE;
     }
 }
@@ -200,18 +204,27 @@ function BoolOr() {
     this.next = function () {
         // XXX: this blocks until all of the queries are not pausing
         var new_doc = new DocumentIdentifier();
-
+        var has_one_pause = false;
         for (var i = 0; i < this.queries.length; i++) {
             var cur_doc = this.queries[i].doc_id;
 
             if (cur_doc.equals(this.doc_id)) {
-                cur_doc = this.queries[i].next();
-                if (cur_doc == PAUSE) return cur_doc;
+                var tmp = this.queries[i].next();
+
+                // in case we have one query that must pause, advance the other queries anyway
+                // so we group the pauses
+                if (tmp == PAUSE) {
+                    has_one_pause = true;
+                    continue;
+                } else {
+                    cur_doc = tmp;
+                }
             }
 
             if (cur_doc.cmp(new_doc) <= 0) new_doc = cur_doc;
         }
-
+        if (has_one_pause)
+            return PAUSE;
         return this.doc_id = new_doc;
     }
 }
@@ -307,7 +320,6 @@ var searcher = http.createServer(function (request, response) {
                     response.write(get_store_obj(time_id).get(offset));
                 }
             } while(n != PAUSE);
-
             response.write(buf);
         },1000);
         response.on('end', function() {
@@ -334,16 +346,16 @@ var acceptor = http.createServer(function (request, response) {
     });
 });
 
-acceptor.listen(8000);
-searcher.listen(8001);
+acceptor.listen(WRITER_PORT);
+searcher.listen(SEARCHER_PORT);
 
 var udp = dgram.createSocket('udp4');
 udp.on('message', function (message, remote) {
     get_store_obj(time()).append(message, ["any"], function() {});
 });
-udp.bind(8002);
+udp.bind(WRITER_UDP_PORT);
 
-console.log("running on 8000 and 8001 and 8002 for udp");
+console.log("running on writer: http@" + WRITER_PORT + "/udp@" + WRITER_UDP_PORT +", searcher: http@" + SEARCHER_PORT);
 setInterval(function() {
     console.log("written so far: " + COUNTER);
 },1000);
