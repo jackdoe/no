@@ -1,0 +1,14 @@
+message Payload {
+    required uint32 time_id = 1;
+    required uint32 offset = 2;
+    required bytes data = 3;
+}
+
+message Header {
+    repeated string tags = 1;
+}
+
+message Data {
+    required Header header = 1;
+    required Payload payload = 2;
+}

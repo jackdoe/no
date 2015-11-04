@@ -3,6 +3,7 @@
 // curl -XGET -d '{blablabla}' 'http://localhost:8000/?tags=a&tags=b' # send messages with tags a and b
 // echo -n "hello" >/dev/udp/localhost/8003
 
+var protobuf = require('protocol-buffers')
 var http = require('http');
 var fs = require('fs');
 var timers = require('timers');
@@ -19,6 +20,7 @@ var WRITER_UDP_PORT = 8002;
 var SEARCHER_PORT = 8001;
 var TERMINATED = new Buffer(1);
 TERMINATED.fill(0);
+var messages = protobuf(fs.readFileSync('data.proto'))
 
 function Store(time_id) {
     this.time_id = time_id;
@@ -45,30 +47,27 @@ Store.prototype.append = function(data, tags, callback) {
     if (data.length > 0xFFFFFF || data.length == 0)
         this.log("data.length("+data.length+") > 0xFFFFFF",0);
 
-    var stringified_tags = JSON.stringify(tags); // XXX: use something else
-    var header = new Buffer(4 + 4 + stringified_tags.length);
-    header.fill(0);
-    // total payload size data.len + tags.len + tags size
-    // encoding the tags as well so that we can chain no.js workers together
-    // and just from consuming the stream they can reconstruct the indexes
-    header.writeUInt32BE(data.length + stringified_tags.length + 4, 0);
-    header.writeUInt32BE(stringified_tags.length, 4);
-    header.write(stringified_tags,8);
+    var encoded = messages.Data.encode({
+        payload: {time_id: this.time_id, offset: this.position, data: data},
+        header: {tags: tags}
+    });
+    // XXX: make the protobuf decoder understand streams and offsets, instead of writing the length here
+    var blen = new Buffer(4);
+    blen.fill(0);
+    blen.writeUInt32BE(encoded.length, 0);
 
-    var n_written = fs.writeSync(this.fd, header, 0, header.length, this.position);
-    if (n_written != header.length)
-        this.log("failed to write "+header.length+" bytes, got: " + n_written, 0);
+    var n_written = fs.writeSync(this.fd, blen, 0, blen.length, this.position);
+    if (n_written != blen.length)
+        this.log("failed to write "+blen.length+" bytes, got: " + n_written, 0);
 
-    if (fs.writeSync(this.fd, data, 0, data.length, this.position + header.length) != data.length)
-        this.log("failed to write " + data.length + " bytes", 0);
-
-    COUNTER++;
+    if (fs.writeSync(this.fd, encoded, 0, encoded.length, this.position + blen.length) != encoded.length)
+        this.log("failed to write " + encoded.length + " bytes", 0);
 
     var buf = new Buffer(4);
     buf.fill(0);
     buf.writeUInt32BE(this.position, 0);
 
-    this.position += data.length + header.length; // BUMP
+    this.position += encoded.length + blen.length;
 
     for (var i = 0; i < tags.length; i++) {
         var tag = tags[i];
@@ -81,6 +80,8 @@ Store.prototype.append = function(data, tags, callback) {
             fs.writeSync(fd,buf,0, 4); // A write that's under the size of 'PIPE_BUF' is supposed to be atomic
         }
     }
+
+    COUNTER++;
     callback();
 };
 
@@ -381,7 +382,7 @@ var searcher = http.createServer(function (request, response) {
                         if (n != PAUSE) {
                             var bytes = get_store_obj(n.time_id).get(n.offset);
                             if (qs.json) {
-                                response.write(JSON.stringify({time_id: n.time_id, offset: n.offset, data: bytes }));
+                                response.write(JSON.stringify(messages.Data.decode(bytes)));
                             } else {
                                 response.write(bytes);
                             }
