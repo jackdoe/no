@@ -19,6 +19,7 @@ var ROOT = "/tmp/messages/";
 var PAUSE = -1;
 
 var WRITER_PORT = argv.writer || 8000;
+var NODE_ID = argv.node_id || 0;
 var WRITER_UDP_PORT = argv.udp || 8002;
 var SEARCHER_PORT = argv.searcher || 8001;
 var POOL = (argv.pool instanceof Array ? argv.pool : [argv.pool] ).filter(function(e) { return e });
@@ -59,7 +60,7 @@ Store.prototype.append = function(data, tags, replica, callback) {
         encoded = data;
     } else {
         encoded = messages.Data.encode({
-            payload: {time_id: this.time_id, offset: this.position, data: data},
+            payload: {time_id: this.time_id, offset: this.position, data: data, node_id: NODE_ID},
             header: {tags: tags}
         });
     }
@@ -453,5 +454,5 @@ udp.on('message', function (message, remote) {
 });
 udp.bind(WRITER_UDP_PORT);
 
-console.log("running on writer: http@" + WRITER_PORT + "/udp@" + WRITER_UDP_PORT +", searcher: http@" + SEARCHER_PORT + " POOL: " + JSON.stringify(POOL));
+console.log("running on writer: http@" + WRITER_PORT + "/udp@" + WRITER_UDP_PORT +", searcher: http@" + SEARCHER_PORT + " POOL: " + JSON.stringify(POOL) + " NODE_ID: " + NODE_ID);
 setInterval(function() { console.log(time() + " written so far: " + COUNTER); },1000);

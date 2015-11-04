@@ -1,7 +1,8 @@
 message Payload {
     required uint32 time_id = 1;
     required uint32 offset = 2;
-    required bytes data = 3;
+    required uint32 node_id = 3;
+    required bytes data = 4;
 }
 
 message Header {
