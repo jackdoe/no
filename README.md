@@ -2,7 +2,7 @@
 well.. lets see
 
 #### Running 
-```#> node rw.js &```
+```#> node rw.js --writer 8000 --searcher 8001 &```
 
 #### Reading
 ```

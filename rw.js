@@ -13,15 +13,16 @@ var dgram = require('dgram');
 var udp = dgram.createSocket('udp4');
 var messages = protobuf(fs.readFileSync('data.proto'))
 
-var COUNTER = 0;
+var WCOUNTER = 0;
+var RCOUNTER = 0;
 var NAME_TO_STORE = {}
 var ROOT = "/tmp/messages/";
 var PAUSE = -1;
 
-var WRITER_PORT = argv.writer || 8000;
+var WRITER_PORT = argv.writer || 0;
 var NODE_ID = argv.node_id || 0;
-var WRITER_UDP_PORT = argv.udp || 8002;
-var SEARCHER_PORT = argv.searcher || 8001;
+var WRITER_UDP_PORT = argv.udp || 0;
+var SEARCHER_PORT = argv.searcher || 0;
 var POOL = (argv.pool instanceof Array ? argv.pool : [argv.pool] ).filter(function(e) { return e });
 
 var TERMINATED = new Buffer(1);
@@ -97,7 +98,6 @@ Store.prototype.append = function(data, tags, replica, callback) {
         }
     }
 
-    COUNTER++;
     callback(encoded);
 };
 
@@ -393,6 +393,7 @@ var searcher = http.createServer(function (request, response) {
 
                         if (n != PAUSE) {
                             var bytes = get_store_obj(n.time_id).get(n.offset);
+                            RCOUNTER++;
                             if (qs.json) {
                                 response.write(JSON.stringify(messages.Data.decode(bytes)));
                             } else {
@@ -431,6 +432,7 @@ var acceptor = http.createServer(function (request, response) {
             }
 
             s.append(body, tags || [], query.replica, function(encoded) {
+                WCOUNTER++;
                 if (!query.replica && POOL.length > 0) {
                     var r = http.request({host: POOL.random(), method: 'POST', port: WRITER_PORT, path: '/?replica=1', body: encoded}, function (re) {});
                     r.write(encoded);
@@ -449,13 +451,17 @@ process.on('uncaughtException', function(e){
     console.log((e instanceof Error ? e.stack : e));
 });
 
-acceptor.listen(WRITER_PORT);
-searcher.listen(SEARCHER_PORT);
+if (WRITER_PORT > 0)
+    acceptor.listen(WRITER_PORT);
 
-udp.on('message', function (message, remote) {
-    get_store_obj(time()).append(message, ["any"], function() {});
-});
-udp.bind(WRITER_UDP_PORT);
+if (SEARCHER_PORT > 0)
+    searcher.listen(SEARCHER_PORT);
+
+if (WRITER_UDP_PORT > 0) {
+    udp.on('message', function (message, remote) { get_store_obj(time()).append(message, ["any"], function() {}); });
+    udp.bind(WRITER_UDP_PORT);
+}
 
 console.log("running on writer: http@" + WRITER_PORT + "/udp@" + WRITER_UDP_PORT +", searcher: http@" + SEARCHER_PORT + " POOL: " + JSON.stringify(POOL) + " NODE_ID: " + NODE_ID);
-setInterval(function() { console.log(time() + " written so far: " + COUNTER); },1000);
+setInterval(function() { console.log(time() + " written so far: " + WCOUNTER + " searched so far: " + RCOUNTER); },1000);
+
