@@ -5,7 +5,6 @@ well.. lets see
 ```
 #> node rw.js --writer 8000 --searcher 8001 &
 
-# or
 # must have only one writer per box, but can have multiple searchers
 
 #> node rw.js --writer 8000 &
