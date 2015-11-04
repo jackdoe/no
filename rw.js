@@ -26,6 +26,9 @@ var POOL = (argv.pool instanceof Array ? argv.pool : [argv.pool] ).filter(functi
 var TERMINATED = new Buffer(1);
 TERMINATED.fill(0);
 
+Array.prototype.random = function () {
+  return this[Math.floor((Math.random()*this.length))];
+}
 
 function Store(time_id) {
     this.time_id = time_id;
@@ -48,14 +51,18 @@ Store.prototype.log = function(msg, level) {
         console.log(msg);
 }
 
-Store.prototype.append = function(data, tags, callback) {
+Store.prototype.append = function(data, tags, replica, callback) {
     if (data.length > 0xFFFFFF || data.length == 0)
         this.log("data.length("+data.length+") > 0xFFFFFF",0);
-
-    var encoded = messages.Data.encode({
-        payload: {time_id: this.time_id, offset: this.position, data: data},
-        header: {tags: tags}
-    });
+    var encoded;
+    if (replica) {
+        encoded = data;
+    } else {
+        encoded = messages.Data.encode({
+            payload: {time_id: this.time_id, offset: this.position, data: data},
+            header: {tags: tags}
+        });
+    }
     // XXX: make the protobuf decoder understand streams and offsets, instead of writing the length here
     var blen = new Buffer(4);
     blen.fill(0);
@@ -409,12 +416,22 @@ var acceptor = http.createServer(function (request, response) {
     request.on('data', function (data) { body += data; });
     request.on('end', function () {
         try {
-            var s = get_store_obj(time());
-            var tags = query.tags;
-            if (!(tags instanceof Array))
-                tags = [tags];
+            var tags,s;
+            if (query.replica) {
+                var decoded = messages.Data.decode(new Buffer(body));
+                s = get_store_obj(decoded.payload.time_id);
+                tags = decoded.header.tags;
+            } else {
+                s = get_store_obj(time());
+                tags = (query.tags instanceof Array ? query.tags : [query.tags] ).filter(function(e) { return e });
+            }
 
-            s.append(new Buffer(body), tags || [], function(encoded) {
+            s.append(new Buffer(body), tags || [], query.replica, function(encoded) {
+                if (!query.replica && POOL.length > 0) {
+                    var r = http.request({host: POOL.random(), method: 'POST', port: WRITER_PORT, path: '/?replica=1', body: encoded}, function (re) {});
+                    r.write(encoded);
+                    r.end();
+                }
                 response.writeHead(200, {"Content-Type": "application/json"});
                 response.end(JSON.stringify({offset: s.position, fn: s.fn}));
             });
