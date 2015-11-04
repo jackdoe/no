@@ -152,14 +152,12 @@ function Term(tag) {
     this.left = function() { return this.size - this.offset };
     this.reopen_if_needed = function() {
         if (this.fd > 0) {
+            if (this.left() == 0) {
+                this.size = fs.fstatSync(this.fd).size;
+                if (this.left() > 0)
+                    return true;
+            }
             if (this.time_id == time())
-                return true;
-
-            if (this.left() > 0)
-                return true;
-
-            this.size = fs.fstatSync(this.fd).size;
-            if (this.left() > 0)
                 return true;
         }
 
@@ -400,5 +398,5 @@ udp.bind(WRITER_UDP_PORT);
 
 console.log("running on writer: http@" + WRITER_PORT + "/udp@" + WRITER_UDP_PORT +", searcher: http@" + SEARCHER_PORT);
 setInterval(function() {
-    console.log("written so far: " + COUNTER);
+    console.log(time() + " written so far: " + COUNTER);
 },1000);
