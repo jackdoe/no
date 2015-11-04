@@ -132,6 +132,11 @@ function DocumentIdentifier() {
         this.time_id = Number.MAX_VALUE;
         this.offset = Number.MAX_VALUE;
     }
+    this.set = function(other) {
+        this.time_id = other.time_id;
+        this.offset = other.offset;
+    }
+
 }
 
 function Term(tag) {
@@ -212,6 +217,7 @@ function Term(tag) {
 function BoolOr() {
     this.queries = [];
     this.doc_id = new DocumentIdentifier();
+    this.new_doc = new DocumentIdentifier();
 
     this.add = function(query) {
         this.queries.push(query);
@@ -224,7 +230,7 @@ function BoolOr() {
 
     this.next = function () {
         // XXX: this blocks until all of the queries are not pausing
-        var new_doc = new DocumentIdentifier();
+        this.new_doc.reset();
         var has_one_pause = false;
         for (var i = 0; i < this.queries.length; i++) {
             var cur_doc = this.queries[i].doc_id;
@@ -241,12 +247,12 @@ function BoolOr() {
                     cur_doc = tmp;
                 }
             }
-
-            if (cur_doc.cmp(new_doc) <= 0) new_doc = cur_doc;
+            if (cur_doc.cmp(this.new_doc) <= 0) this.new_doc.set(cur_doc);
         }
         if (has_one_pause)
             return PAUSE;
-        return this.doc_id = new_doc;
+        this.doc_id.set(this.new_doc);
+        return this.doc_id;
     }
 
     this.to_string = function () {
