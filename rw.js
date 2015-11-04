@@ -17,7 +17,6 @@ var WRITER_PORT = 8000;
 var WRITER_UDP_PORT = 8002;
 var SEARCHER_PORT = 8001;
 
-
 function Store(time_id) {
     this.time_id = time_id;
     try {
@@ -98,8 +97,11 @@ var get_store_obj = function(time_id) {
     return NAME_TO_STORE[time_id];
 }
 
+var ts_to_id = function (ts) {
+    return Math.floor(ts / 10);
+}
 var time = function() {
-    return Math.floor(Date.now() / 10000); // in 10s of time_ids
+    return ts_to_id(Math.floor(Date.now() / 1000)); // in 10s of time_ids
 }
 
 var time_inc = function(from) {
@@ -201,6 +203,9 @@ function Term(tag) {
         }
         return PAUSE;
     }
+    this.to_string = function () {
+        return "tag:" + this.tag + "@" + (this.from || 0) + ":" + (this.to || 0);
+    }
 }
 
 function BoolOr() {
@@ -242,6 +247,10 @@ function BoolOr() {
             return PAUSE;
         return this.doc_id = new_doc;
     }
+
+    this.to_string = function () {
+        return "OR(" + this.queries.map(function(e) { return e.to_string() }).join(",") + ")";
+    }
 }
 
 function BoolAnd() {
@@ -269,6 +278,10 @@ function BoolAnd() {
             if (n = this.or.queries.length)
                 return this.doc_id = new_doc;
         }
+    }
+
+    this.to_string = function () {
+        return "AND[" + this.or.to_string() +"]";
     }
 }
 
@@ -306,6 +319,7 @@ var parse = function(obj) {
         }
     }
     if (b.queries.length == 1)
+
         return b.queries[0];
     return b;
 }
@@ -327,7 +341,7 @@ var searcher = http.createServer(function (request, response) {
         obj = JSON.parse(body);
         var q = parse(obj);
         q.set_time_id_range(qs.from,qs.to);
-        console.log(q);
+        console.log(q.to_string());
         var i = setInterval(function() {
             var n;
             do {
@@ -339,9 +353,12 @@ var searcher = http.createServer(function (request, response) {
                 }
 
                 if (n != PAUSE) {
-                    var time_id = n.time_id;
-                    var offset = n.offset;
-                    response.write(get_store_obj(time_id).get(offset));
+                    var bytes = get_store_obj(n.time_id).get(n.offset);
+                    if (qs.json) {
+                        response.write(JSON.stringify({time_id: n.time_id, offset: n.offset, data: bytes }));
+                    } else {
+                        response.write(bytes);
+                    }
                 }
             } while(n != PAUSE);
         },1000);
@@ -351,6 +368,8 @@ var searcher = http.createServer(function (request, response) {
         })
     });
 });
+
+
 
 var acceptor = http.createServer(function (request, response) {
     var url_parts = url.parse(request.url, true);
