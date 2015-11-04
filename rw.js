@@ -433,13 +433,15 @@ var acceptor = http.createServer(function (request, response) {
 
             s.append(body, tags || [], query.replica, function(encoded) {
                 WCOUNTER++;
-                if (!query.replica && POOL.length > 0) {
-                    var r = http.request({host: POOL.random(), method: 'POST', port: WRITER_PORT, path: '/?replica=1', body: encoded}, function (re) {});
-                    r.write(encoded);
-                    r.end();
-                }
                 response.writeHead(200, {"Content-Type": "application/json"});
                 response.end(JSON.stringify({offset: s.position, fn: s.fn}));
+
+                if (!query.replica && POOL.length > 0) {
+                    var r = http.request({host: POOL.random(), method: 'POST', port: WRITER_PORT, path: '/?replica=1', body: encoded}, function (re) {});
+                    r.write(encoded, null, function() {
+                        r.end();
+                    });
+                }
             });
         } catch (e) {
             err_handler(response, e, undefined, true);
