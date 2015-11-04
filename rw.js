@@ -486,6 +486,7 @@ if (WRITER_UDP_PORT > 0) {
 console.log("running on writer: http@" + WRITER_PORT + "/udp@" + WRITER_UDP_PORT +", searcher: http@" + SEARCHER_PORT + " POOL: " + JSON.stringify(POOL) + " NODE_ID: " + NODE_ID);
 setInterval(function() {
     cleaned = 0;
+    // NAME_TO_STORE is only used for writers
     for (var k in NAME_TO_STORE) {
         if (k < time_dec(time())) {
             console.log("cleaning up: " + k);
