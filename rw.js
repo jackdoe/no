@@ -3,6 +3,7 @@
 // curl -XGET -d '{blablabla}' 'http://localhost:8000/?tags=a&tags=b' # send messages with tags a and b
 // echo -n "hello" >/dev/udp/localhost/8003
 
+var argv = require('optimist').argv;
 var protobuf = require('protocol-buffers')
 var http = require('http');
 var fs = require('fs');
@@ -10,17 +11,21 @@ var timers = require('timers');
 var url = require('url');
 var dgram = require('dgram');
 var udp = dgram.createSocket('udp4');
+var messages = protobuf(fs.readFileSync('data.proto'))
 
 var COUNTER = 0;
 var NAME_TO_STORE = {}
 var ROOT = "/tmp/messages/";
 var PAUSE = -1;
-var WRITER_PORT = 8000;
-var WRITER_UDP_PORT = 8002;
-var SEARCHER_PORT = 8001;
+
+var WRITER_PORT = argv.writer || 8000;
+var WRITER_UDP_PORT = argv.udp || 8002;
+var SEARCHER_PORT = argv.searcher || 8001;
+var POOL = (argv.pool instanceof Array ? argv.pool : [argv.pool] ).filter(function(e) { return e });
+
 var TERMINATED = new Buffer(1);
 TERMINATED.fill(0);
-var messages = protobuf(fs.readFileSync('data.proto'))
+
 
 function Store(time_id) {
     this.time_id = time_id;
@@ -82,7 +87,7 @@ Store.prototype.append = function(data, tags, callback) {
     }
 
     COUNTER++;
-    callback();
+    callback(encoded);
 };
 
 Store.prototype.get = function(offset) {
@@ -117,10 +122,6 @@ var time = function() {
 }
 
 var time_inc = function(from) {
-    return from + 1;
-}
-
-var time_dec = function(from) {
     return from + 1;
 }
 
@@ -413,7 +414,7 @@ var acceptor = http.createServer(function (request, response) {
             if (!(tags instanceof Array))
                 tags = [tags];
 
-            s.append(new Buffer(body), tags || [], function() {
+            s.append(new Buffer(body), tags || [], function(encoded) {
                 response.writeHead(200, {"Content-Type": "application/json"});
                 response.end(JSON.stringify({offset: s.position, fn: s.fn}));
             });
@@ -435,5 +436,5 @@ udp.on('message', function (message, remote) {
 });
 udp.bind(WRITER_UDP_PORT);
 
-console.log("running on writer: http@" + WRITER_PORT + "/udp@" + WRITER_UDP_PORT +", searcher: http@" + SEARCHER_PORT);
+console.log("running on writer: http@" + WRITER_PORT + "/udp@" + WRITER_UDP_PORT +", searcher: http@" + SEARCHER_PORT + " POOL: " + JSON.stringify(POOL));
 setInterval(function() { console.log(time() + " written so far: " + COUNTER); },1000);
