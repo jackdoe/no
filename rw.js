@@ -45,14 +45,21 @@ Store.prototype.append = function(data, tags, callback) {
     if (data.length > 0xFFFFFF || data.length == 0)
         this.log("data.length("+data.length+") > 0xFFFFFF",0);
 
-    var blen = new Buffer(4);
-    blen.fill(0);
-    blen.writeUInt32BE(data.length, 0);
-    var n_written = fs.writeSync(this.fd,blen,0,4,this.position);
-    if (n_written != 4)
-        this.log("failed to write 4 bytes, got: " + n_written, 0);
+    var stringified_tags = JSON.stringify(tags); // XXX: use something else
+    var header = new Buffer(4 + 4 + stringified_tags.length);
+    header.fill(0);
+    // total payload size data.len + tags.len + tags size
+    // encoding the tags as well so that we can chain no.js workers together
+    // and just from consuming the stream they can reconstruct the indexes
+    header.writeUInt32BE(data.length + stringified_tags.length + 4, 0);
+    header.writeUInt32BE(stringified_tags.length, 4);
+    header.write(stringified_tags,8);
 
-    if (fs.writeSync(this.fd,data,0,data.length,this.position + 4) != data.length)
+    var n_written = fs.writeSync(this.fd, header, 0, header.length, this.position);
+    if (n_written != header.length)
+        this.log("failed to write "+header.length+" bytes, got: " + n_written, 0);
+
+    if (fs.writeSync(this.fd, data, 0, data.length, this.position + header.length) != data.length)
         this.log("failed to write " + data.length + " bytes", 0);
 
     COUNTER++;
@@ -60,19 +67,20 @@ Store.prototype.append = function(data, tags, callback) {
     var buf = new Buffer(4);
     buf.fill(0);
     buf.writeUInt32BE(this.position, 0);
-    this.position += data.length + 4;
-    var store = this;
-    tags.forEach(function(tag) {
+
+    this.position += data.length + header.length; // BUMP
+
+    for (var i = 0; i < tags.length; i++) {
+        var tag = tags[i];
         if (tag) {
-            fd = store.fd_tags[tag];
+            fd = this.fd_tags[tag];
             if (!fd) {
-                fd = fs.openSync(fn_for_tag(store.time_id, tag),'a');
-                store.fd_tags[tag] = fd;
+                fd = fs.openSync(fn_for_tag(this.time_id, tag),'a');
+                this.fd_tags[tag] = fd;
             }
             fs.writeSync(fd,buf,0, 4); // A write that's under the size of 'PIPE_BUF' is supposed to be atomic
         }
-    });
-
+    }
     callback();
 };
 
