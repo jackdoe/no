@@ -58,10 +58,13 @@ Store.prototype.append = function(data, tags, replica, callback) {
     var encoded;
     if (replica) {
         encoded = data;
+        tags = tags.filter(function(e) { e != "__original__" });
+        tags.push("__replica__");
     } else {
+        tags.push("__original__");
         encoded = messages.Data.encode({
-            payload: {time_id: this.time_id, offset: this.position, data: data, node_id: NODE_ID},
-            header: {tags: tags}
+            header: {tags: tags, time_id: this.time_id, offset: this.position, node_id: NODE_ID},
+            payload: {data: data },
         });
     }
     // XXX: make the protobuf decoder understand streams and offsets, instead of writing the length here
@@ -413,21 +416,21 @@ var searcher = http.createServer(function (request, response) {
 var acceptor = http.createServer(function (request, response) {
     var url_parts = url.parse(request.url, true);
     var query = url_parts.query;
-    var body = '';
-    request.on('data', function (data) { body += data; });
+    var body = new Buffer(0);
+    request.on('data', function (data) { body = Buffer.concat([body,data]) });
     request.on('end', function () {
         try {
             var tags,s;
             if (query.replica) {
-                var decoded = messages.Data.decode(new Buffer(body));
-                s = get_store_obj(decoded.payload.time_id);
+                var decoded = messages.Data.decode(body);
+                s = get_store_obj(decoded.header.time_id);
                 tags = decoded.header.tags;
             } else {
                 s = get_store_obj(time());
                 tags = (query.tags instanceof Array ? query.tags : [query.tags] ).filter(function(e) { return e });
             }
 
-            s.append(new Buffer(body), tags || [], query.replica, function(encoded) {
+            s.append(body, tags || [], query.replica, function(encoded) {
                 if (!query.replica && POOL.length > 0) {
                     var r = http.request({host: POOL.random(), method: 'POST', port: WRITER_PORT, path: '/?replica=1', body: encoded}, function (re) {});
                     r.write(encoded);
