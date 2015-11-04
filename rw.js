@@ -8,6 +8,7 @@ var fs = require('fs');
 var timers = require('timers');
 var url = require('url');
 var dgram = require('dgram');
+var udp = dgram.createSocket('udp4');
 
 var COUNTER = 0;
 var NAME_TO_STORE = {}
@@ -16,6 +17,8 @@ var PAUSE = -1;
 var WRITER_PORT = 8000;
 var WRITER_UDP_PORT = 8002;
 var SEARCHER_PORT = 8001;
+var TERMINATED = new Buffer(1);
+TERMINATED.fill(0);
 
 function Store(time_id) {
     this.time_id = time_id;
@@ -321,6 +324,15 @@ var parse = function(obj) {
         return b.queries[0];
     return b;
 }
+var err_handler = function(response, e, interval, do_not_terminate) {
+    var msg = (e instanceof Error ? e.stack : e);
+    if (!do_not_terminate)
+        response.write(TERMINATED)
+    response.end(msg)
+    if (interval)
+        timers.clearInterval(interval);
+    console.log(msg);
+};
 
 var searcher = http.createServer(function (request, response) {
     response.writeHead(200, {
@@ -336,38 +348,43 @@ var searcher = http.createServer(function (request, response) {
     var done = false;
     var i;
     request.on('end', function () {
-        obj = JSON.parse(body);
-        var q = parse(obj);
-        q.set_time_id_range(qs.from,qs.to);
-        console.log(q.to_string());
-        var i = setInterval(function() {
-            var n;
-            do {
-                var n = q.next()
-                if (n.time_id == Number.MAX_VALUE) {
-                    response.end();
-                    timers.clearInterval(i);
-                    break;
-                }
+        try {
+            obj = JSON.parse(body);
+            var q = parse(obj);
+            q.set_time_id_range(qs.from,qs.to);
+            console.log(q.to_string());
+            var i = setInterval(function() {
+                try {
+                    var n;
+                    do {
+                        var n = q.next()
+                        if (n.time_id == Number.MAX_VALUE) {
+                            response.end();
+                            clearInterval(i);
+                            break;
+                        }
 
-                if (n != PAUSE) {
-                    var bytes = get_store_obj(n.time_id).get(n.offset);
-                    if (qs.json) {
-                        response.write(JSON.stringify({time_id: n.time_id, offset: n.offset, data: bytes }));
-                    } else {
-                        response.write(bytes);
-                    }
+                        if (n != PAUSE) {
+                            var bytes = get_store_obj(n.time_id).get(n.offset);
+                            if (qs.json) {
+                                response.write(JSON.stringify({time_id: n.time_id, offset: n.offset, data: bytes }));
+                            } else {
+                                response.write(bytes);
+                            }
+                        }
+                    } while(n != PAUSE);
+                } catch (e) {
+                    err_handler(response,e,i);
                 }
-            } while(n != PAUSE);
-        },1000);
-
+            },1000);
+        } catch(e) {
+            err_handler(response,e,undefined);
+        };
         response.on('end', function() {
             timers.clearInterval(i);
         })
     });
 });
-
-
 
 var acceptor = http.createServer(function (request, response) {
     var url_parts = url.parse(request.url, true);
@@ -375,28 +392,33 @@ var acceptor = http.createServer(function (request, response) {
     var body = '';
     request.on('data', function (data) { body += data; });
     request.on('end', function () {
-        var s = get_store_obj(time());
-        var tags = query.tags;
-        if (!(tags instanceof Array))
-            tags = [tags];
+        try {
+            var s = get_store_obj(time());
+            var tags = query.tags;
+            if (!(tags instanceof Array))
+                tags = [tags];
 
-        s.append(new Buffer(body), tags || [], function() {
-            response.writeHead(200, {"Content-Type": "text/plain"});
-            response.end("ok " + s.position + "\n");
-        });
+            s.append(new Buffer(body), tags || [], function() {
+                response.writeHead(200, {"Content-Type": "application/json"});
+                response.end(JSON.stringify({offset: s.position, fn: s.fn}));
+            });
+        } catch (e) {
+            err_handler(response, e, undefined, true);
+        }
     });
+});
+
+process.on('uncaughtException', function(e){
+    console.log((e instanceof Error ? e.stack : e));
 });
 
 acceptor.listen(WRITER_PORT);
 searcher.listen(SEARCHER_PORT);
 
-var udp = dgram.createSocket('udp4');
 udp.on('message', function (message, remote) {
     get_store_obj(time()).append(message, ["any"], function() {});
 });
 udp.bind(WRITER_UDP_PORT);
 
 console.log("running on writer: http@" + WRITER_PORT + "/udp@" + WRITER_UDP_PORT +", searcher: http@" + SEARCHER_PORT);
-setInterval(function() {
-    console.log(time() + " written so far: " + COUNTER);
-},1000);
+setInterval(function() { console.log(time() + " written so far: " + COUNTER); },1000);
