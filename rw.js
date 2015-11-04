@@ -45,6 +45,13 @@ function Store(time_id) {
     this.fd_tags = {}
 }
 
+Store.prototype.cleanup = function() {
+    for (var k in this.fd_tags) {
+        fs.closeSync(this.fd_tags[k]);
+    }
+    fs.closeSync(this.fd);
+}
+
 Store.prototype.log = function(msg, level) {
     msg = this.fn + ": " + msg;
     if (level == 0)
@@ -53,7 +60,7 @@ Store.prototype.log = function(msg, level) {
         console.log(msg);
 }
 
-Store.prototype.append = function(data, tags, replica, callback) {
+Store.prototype.append = function(data, tags, replica) {
     if (data.length > 0xFFFFFF || data.length == 0)
         this.log("data.length("+data.length+") > 0xFFFFFF",0);
     var encoded;
@@ -98,7 +105,7 @@ Store.prototype.append = function(data, tags, replica, callback) {
         }
     }
 
-    callback(encoded);
+    return encoded;
 };
 
 Store.prototype.get = function(offset) {
@@ -119,10 +126,12 @@ var fn_for_tag = function(time_id,tag) {
     return ROOT + time_id + '/tag#' + tag + '.txt';
 }
 
-var get_store_obj = function(time_id) {
-    if (!(time_id in NAME_TO_STORE))
-        NAME_TO_STORE[time_id] = new Store(time_id)
-    return NAME_TO_STORE[time_id];
+var get_store_obj = function(time_id, cache) {
+    if (!cache)
+        return new Store(time_id);
+    if (!(time_id in cache))
+        cache[time_id] = new Store(time_id)
+    return cache[time_id];
 }
 
 var ts_to_id = function (ts) {
@@ -134,6 +143,10 @@ var time = function() {
 
 var time_inc = function(from) {
     return from + 1;
+}
+
+var time_dec = function(from) {
+    return from - 1;
 }
 
 function DocumentIdentifier() {
@@ -374,6 +387,7 @@ var searcher = http.createServer(function (request, response) {
     request.on('data', function (data) { body += data; });
     var done = false;
     var i;
+    var cache = {};
     request.on('end', function () {
         try {
             obj = JSON.parse(body);
@@ -392,7 +406,7 @@ var searcher = http.createServer(function (request, response) {
                         }
 
                         if (n != PAUSE) {
-                            var bytes = get_store_obj(n.time_id).get(n.offset);
+                            var bytes = get_store_obj(n.time_id,cache).get(n.offset);
                             RCOUNTER++;
                             if (qs.json) {
                                 response.write(JSON.stringify(messages.Data.decode(bytes)));
@@ -410,6 +424,9 @@ var searcher = http.createServer(function (request, response) {
         };
         response.on('end', function() {
             timers.clearInterval(i);
+            for (var k in cache) {
+                cache[k].cleanup();
+            }
         })
     });
 });
@@ -421,28 +438,30 @@ var acceptor = http.createServer(function (request, response) {
     request.on('data', function (data) { body = Buffer.concat([body,data]) });
     request.on('end', function () {
         try {
-            var tags,s;
+            var tags,t;
+
             if (query.replica) {
                 var decoded = messages.Data.decode(body);
-                s = get_store_obj(decoded.header.time_id);
+                t = decoded.header.time_id
                 tags = decoded.header.tags;
             } else {
-                s = get_store_obj(time());
+                t = time();
                 tags = (query.tags instanceof Array ? query.tags : [query.tags] ).filter(function(e) { return e });
             }
 
-            s.append(body, tags || [], query.replica, function(encoded) {
-                WCOUNTER++;
-                response.writeHead(200, {"Content-Type": "application/json"});
-                response.end(JSON.stringify({offset: s.position, fn: s.fn}));
+            var s = get_store_obj(t, NAME_TO_STORE);
+            var encoded = s.append(body, tags, query.replica);
+            WCOUNTER++;
 
-                if (!query.replica && POOL.length > 0) {
-                    var r = http.request({host: POOL.random(), method: 'POST', port: WRITER_PORT, path: '/?replica=1', body: encoded}, function (re) {});
-                    r.write(encoded, null, function() {
-                        r.end();
-                    });
-                }
-            });
+            response.writeHead(200, {"Content-Type": "application/json"});
+            response.end(JSON.stringify({offset: s.position, fn: s.fn}));
+
+            if (!query.replica && POOL.length > 0) {
+                var r = http.request({host: POOL.random(), method: 'POST', port: WRITER_PORT, path: '/?replica=1', body: encoded}, function (re) {});
+                r.write(encoded, null, function() {
+                    r.end();
+                });
+            }
         } catch (e) {
             err_handler(response, e, undefined, true);
         }
@@ -460,10 +479,23 @@ if (SEARCHER_PORT > 0)
     searcher.listen(SEARCHER_PORT);
 
 if (WRITER_UDP_PORT > 0) {
-    udp.on('message', function (message, remote) { get_store_obj(time()).append(message, ["any"], function() {}); });
+    udp.on('message', function (message, remote) { get_store_obj(time(), NAME_TO_STORE).append(message, ["any"], function() {}); });
     udp.bind(WRITER_UDP_PORT);
 }
 
 console.log("running on writer: http@" + WRITER_PORT + "/udp@" + WRITER_UDP_PORT +", searcher: http@" + SEARCHER_PORT + " POOL: " + JSON.stringify(POOL) + " NODE_ID: " + NODE_ID);
-setInterval(function() { console.log(time() + " written so far: " + WCOUNTER + " searched so far: " + RCOUNTER); },1000);
+setInterval(function() {
+    cleaned = 0;
+    for (var k in NAME_TO_STORE) {
+        if (k < time_dec(time())) {
+            console.log("cleaning up: " + k);
+            NAME_TO_STORE[k].cleanup();
+            delete NAME_TO_STORE[k];
+            cleaned++;
+        }
+    }
+    console.log(time() + " written: " + WCOUNTER + "/s, searched: " + RCOUNTER + "/s, cleaned: " + cleaned);
+    RCOUNTER = 0;
+    WCOUNTER = 0;
+},1000);
 
