@@ -435,12 +435,15 @@ var acceptor = http.createServer(function (request, response) {
     var url_parts = url.parse(request.url, true);
     var query = url_parts.query;
     var body = new Buffer(0);
+    var is_receiving_replica = query.replica;
+    var wait_for_n_replicas = parseInt(query.wait_for_n_replicas || 0);
+
     request.on('data', function (data) { body = Buffer.concat([body,data]) });
     request.on('end', function () {
         try {
             var tags,t;
 
-            if (query.replica) {
+            if (is_receiving_replica) {
                 var decoded = messages.Data.decode(body);
                 t = decoded.header.time_id
                 tags = decoded.header.tags;
@@ -450,18 +453,30 @@ var acceptor = http.createServer(function (request, response) {
             }
 
             var s = get_store_obj(t, NAME_TO_STORE);
-            var encoded = s.append(body, tags, query.replica);
+            var encoded = s.append(body, tags, is_receiving_replica);
             WCOUNTER++;
 
-            response.writeHead(200, {"Content-Type": "application/json"});
-            response.end(JSON.stringify({offset: s.position, fn: s.fn}));
-
-            if (!query.replica && POOL.length > 0) {
-                var r = http.request({host: POOL.random(), method: 'POST', port: WRITER_PORT, path: '/?replica=1', body: encoded}, function (re) {});
-                r.write(encoded, null, function() {
-                    r.end();
-                });
+            var ack = function() {
+                response.writeHead(200, {"Content-Type": "application/json"});
+                response.end(JSON.stringify({offset: s.position, fn: s.fn}));
             }
+
+            if (query.ack_before_replication)
+                ack();
+
+            if (!is_receiving_replica && POOL.length > 0) {
+                for (var i = 0; i < wait_for_n_replicas && i < POOL.length; i++) {
+                    // always send to the same items from the pool
+                    // must randomize the pool arguments per box in order to balance
+                    var r = http.request({host: POOL[i], method: 'POST', port: WRITER_PORT, path: '/?replica=1', body: encoded}, function (re) {});
+                    r.write(encoded, null, function() {
+                        r.end();
+                    });
+                }
+            }
+
+            if (!query.ack_before_replication)
+                ack();
         } catch (e) {
             err_handler(response, e, undefined, true);
         }
