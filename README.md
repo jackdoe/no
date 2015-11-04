@@ -2,7 +2,18 @@
 well.. lets see
 
 #### Running 
-```#> node rw.js --writer 8000 --searcher 8001 &```
+```
+#> node rw.js --writer 8000 --searcher 8001 &
+
+# or
+# must have only one writer per box, but can have multiple searchers
+
+#> node rw.js --writer 8000 &
+#> node rw.js --searcher 8001 &
+#> node rw.js --searcher 8002 &
+#> node rw.js --searcher 8003 &
+
+```
 
 #### Reading
 ```
