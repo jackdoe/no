@@ -498,7 +498,8 @@ var acceptor = http.createServer(function (request, response) {
                 for (var i = 0; i < wait_for_n_replicas && i < POOL.length; i++) {
                     // always send to the same items from the pool
                     // must randomize the pool arguments per box in order to balance
-                    var r = http.request({host: POOL[i], method: 'POST', port: WRITER_PORT, path: '/?replica=1', body: encoded}, function (re) {});
+                    var r = http.request({host: POOL[i], method: 'POST', port: WRITER_PORT, path: '/?replica=' + (i + 1), body: encoded}, function (re) {});
+                    console.log(r);
                     r.write(encoded, null, function() {
                         if (--need == 0) {
                             if (!query.ack_before_replication)
