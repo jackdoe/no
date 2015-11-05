@@ -103,10 +103,7 @@ Store.prototype.append = function(data, tags, replica) {
     var encoded;
     if (replica) {
         encoded = data;
-        tags = tags.filter(function(e) { e != "__original__" });
-        tags.push("__replica__");
     } else {
-        tags.push("__original__");
         encoded = messages.Data.encode({
             header: {tags: tags, time_id: this.time_id, offset: this.position, node_id: NODE_ID},
             payload: {data: data },
@@ -472,9 +469,10 @@ var acceptor = http.createServer(function (request, response) {
     var url_parts = url.parse(request.url, true);
     var query = url_parts.query;
     var body = new Buffer(0);
-    var is_receiving_replica = query.replica;
+    var is_receiving_replica = parseInt(query.replica || 0);
     var wait_for_n_replicas = parseInt(query.wait_for_n_replicas || 0);
     var do_n_replicas = parseInt(query.do_n_replicas || 0);
+    var per_replica_timeout_ms = parseInt(query.per_replica_timeout_ms || 1000);
     request.on('data', function (data) { body = Buffer.concat([body,data]) });
     request.on('end', function () {
         try {
@@ -492,10 +490,10 @@ var acceptor = http.createServer(function (request, response) {
             var s = get_store_obj(t, NAME_TO_STORE);
             var encoded = s.append(body, tags, is_receiving_replica);
             WCOUNTER++;
-
+            var errors = [];
             var ack = function() {
                 response.writeHead(200, {"Content-Type": "application/json"});
-                response.end(JSON.stringify({offset: s.position, fn: s.fn}));
+                response.end(JSON.stringify({offset: s.position, fn: s.fn, errors: errors, encoded_length: encoded.length}));
             }
 
             if (query.ack_before_replication)
@@ -503,18 +501,50 @@ var acceptor = http.createServer(function (request, response) {
 
             if (!is_receiving_replica && POOL.length > 0 && do_n_replicas > 0) {
                 var need = Math.min(wait_for_n_replicas, POOL.length, do_n_replicas);
-                for (var i = 0; i < do_n_replicas && i < POOL.length; i++) {
+                var left = Math.min(POOL.length, do_n_replicas);
+                for (var idx = 0; idx < do_n_replicas && idx < POOL.length; idx++) {
                     // always send to the same items from the pool
                     // must randomize the pool arguments per box in order to balance
-                    var r = http.request({host: POOL[i].hostname, method: 'POST', port: POOL[i].port, path: '/?replica=' + (i + 1), body: encoded}, function (re) {});
+                    var rr = http.request({
+                        host: POOL[idx].host,
+                        port: POOL[idx].port,
+                        method: 'POST',
+                        path: '/?replica=' + (idx + 1), body: encoded}, function (replica_response) {
+                            var data = '';
+                            replica_response.on('data', function(chunk) { data += chunk; });
+                            replica_response.on('end', function() {
+                                left--;
+                                try {
+                                    var rlen = JSON.parse(data).encoded_length;
+                                    if (rlen != encoded.length)
+                                        throw(new Error("remote encoded length("+rlen+") != local encoded length("+encoded.length+")"));
+                                    need--;
+                                } catch (e) {
+                                    errors.push(e.message)
+                                }
 
-                    r.write(encoded, null, function() {
-                        if (--need == 0) {
-                            if (!query.ack_before_replication)
-                                ack();
-                        }
-                        r.end();
+                                if ((need == 0 || left == 0) && !query.ack_before_replication)
+                                    ack();
+                            });
+                        });
+
+                    rr.on('socket', function (socket) {
+                        socket.setTimeout(per_replica_timeout_ms);
+                        socket.on('timeout', function() {
+                            rr.abort();
+                        });
                     });
+
+                    if (!query.ack_before_replication) {
+                        rr.on('error', function (err) {
+                            errors.push(err.message)
+                            if (--left == 0)
+                                ack();
+                        });
+                    }
+
+                    rr.write(encoded);
+                    rr.end();
                 }
             } else {
                 if (!query.ack_before_replication)
