@@ -474,7 +474,7 @@ var acceptor = http.createServer(function (request, response) {
     var body = new Buffer(0);
     var is_receiving_replica = query.replica;
     var wait_for_n_replicas = parseInt(query.wait_for_n_replicas || 0);
-
+    var do_n_replicas = parseInt(query.do_n_replicas || 0);
     request.on('data', function (data) { body = Buffer.concat([body,data]) });
     request.on('end', function () {
         try {
@@ -501,13 +501,13 @@ var acceptor = http.createServer(function (request, response) {
             if (query.ack_before_replication)
                 ack();
 
-            if (!is_receiving_replica && POOL.length > 0) {
-                var need = Math.min(wait_for_n_replicas, POOL.length);
-                for (var i = 0; i < wait_for_n_replicas && i < POOL.length; i++) {
+            if (!is_receiving_replica && POOL.length > 0 && do_n_replicas > 0) {
+                var need = Math.min(wait_for_n_replicas, POOL.length, do_n_replicas);
+                for (var i = 0; i < do_n_replicas && i < POOL.length; i++) {
                     // always send to the same items from the pool
                     // must randomize the pool arguments per box in order to balance
                     var r = http.request({host: POOL[i].hostname, method: 'POST', port: POOL[i].port, path: '/?replica=' + (i + 1), body: encoded}, function (re) {});
-                    console.log(r);
+
                     r.write(encoded, null, function() {
                         if (--need == 0) {
                             if (!query.ack_before_replication)
