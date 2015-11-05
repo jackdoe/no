@@ -501,7 +501,6 @@ var acceptor = http.createServer(function (request, response) {
             if (query.ack_before_replication)
                 ack();
 
-
             if (!is_receiving_replica && POOL.length > 0) {
                 var need = Math.min(wait_for_n_replicas, POOL.length);
                 for (var i = 0; i < wait_for_n_replicas && i < POOL.length; i++) {
@@ -517,6 +516,9 @@ var acceptor = http.createServer(function (request, response) {
                         r.end();
                     });
                 }
+            } else {
+                if (!query.ack_before_replication)
+                    ack();
             }
 
         } catch (e) {
