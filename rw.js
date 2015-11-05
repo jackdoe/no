@@ -3,7 +3,6 @@
 // curl -XGET -d '{blablabla}' 'http://localhost:8000/?tags=a&tags=b' # send messages with tags a and b
 // echo -n "hello" >/dev/udp/localhost/8003
 
-var argv = require('optimist').argv;
 var protobuf = require('protocol-buffers')
 var http = require('http');
 var fs = require('fs');
@@ -12,17 +11,24 @@ var url = require('url');
 var dgram = require('dgram');
 var udp = dgram.createSocket('udp4');
 var messages = protobuf(fs.readFileSync('data.proto'))
+var argv = require('optimist')
+    .default('root','/tmp/messages')
+    .default('writer',0)
+    .default('udp',0)
+    .default('searcher',0)
+    .default('node_id',0)
+    .argv;
 
 var WCOUNTER = 0;
 var RCOUNTER = 0;
 var NAME_TO_STORE = {}
-var ROOT = "/tmp/messages/";
+var ROOT = argv.root;
 var PAUSE = -1;
 
-var WRITER_PORT = argv.writer || 0;
-var NODE_ID = argv.node_id || 0;
-var WRITER_UDP_PORT = argv.udp || 0;
-var SEARCHER_PORT = argv.searcher || 0;
+var WRITER_PORT = argv.writer;
+var NODE_ID = argv.node_id;
+var WRITER_UDP_PORT = argv.udp
+var SEARCHER_PORT = argv.searcher;
 var POOL = (argv.pool instanceof Array ? argv.pool : [argv.pool] ).filter(function(e) { return e });
 
 var TERMINATED = new Buffer(1);
