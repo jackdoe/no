@@ -6,6 +6,7 @@
 var protobuf = require('protocol-buffers')
 var http = require('http');
 var fs = require('fs');
+var url = require('url');
 var timers = require('timers');
 var url = require('url');
 var dgram = require('dgram');
@@ -47,7 +48,15 @@ var WRITER_PORT = argv.writer;
 var NODE_ID = argv.node_id;
 var WRITER_UDP_PORT = argv.udp
 var SEARCHER_PORT = argv.searcher;
-var POOL = (argv.pool instanceof Array ? argv.pool : [argv.pool] ).filter(function(e) { return e });
+var POOL = (argv.pool instanceof Array ? argv.pool : [argv.pool] )
+    .filter(function(e) { return e })
+    .map(function(e) {
+        if (!e.startsWith("http://"))
+            e = "http://" + e;
+
+        var u = url.parse(e)
+        return { host: u.hostname, port: u.port || WRITER_UDP_PORT }
+    });
 
 var TERMINATED = new Buffer(1);
 TERMINATED.fill(0);
@@ -498,7 +507,7 @@ var acceptor = http.createServer(function (request, response) {
                 for (var i = 0; i < wait_for_n_replicas && i < POOL.length; i++) {
                     // always send to the same items from the pool
                     // must randomize the pool arguments per box in order to balance
-                    var r = http.request({host: POOL[i], method: 'POST', port: WRITER_PORT, path: '/?replica=' + (i + 1), body: encoded}, function (re) {});
+                    var r = http.request({host: POOL[i].hostname, method: 'POST', port: POOL[i].port, path: '/?replica=' + (i + 1), body: encoded}, function (re) {});
                     console.log(r);
                     r.write(encoded, null, function() {
                         if (--need == 0) {
