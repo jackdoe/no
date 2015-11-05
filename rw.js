@@ -492,19 +492,23 @@ var acceptor = http.createServer(function (request, response) {
             if (query.ack_before_replication)
                 ack();
 
+
             if (!is_receiving_replica && POOL.length > 0) {
+                var need = Math.min(wait_for_n_replicas, POOL.length);
                 for (var i = 0; i < wait_for_n_replicas && i < POOL.length; i++) {
                     // always send to the same items from the pool
                     // must randomize the pool arguments per box in order to balance
                     var r = http.request({host: POOL[i], method: 'POST', port: WRITER_PORT, path: '/?replica=1', body: encoded}, function (re) {});
                     r.write(encoded, null, function() {
+                        if (--need == 0) {
+                            if (!query.ack_before_replication)
+                                ack();
+                        }
                         r.end();
                     });
                 }
             }
 
-            if (!query.ack_before_replication)
-                ack();
         } catch (e) {
             err_handler(response, e, undefined, true);
         }
@@ -542,4 +546,3 @@ setInterval(function() {
     RCOUNTER = 0;
     WCOUNTER = 0;
 },1000);
-
