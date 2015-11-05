@@ -10,7 +10,25 @@ var timers = require('timers');
 var url = require('url');
 var dgram = require('dgram');
 var udp = dgram.createSocket('udp4');
-var messages = protobuf(fs.readFileSync('data.proto'))
+
+var messages = protobuf(`
+message Payload {
+    required bytes data = 4;
+}
+
+message Header {
+    required uint64 time_id = 1;
+    required uint64 offset = 2;
+    required uint64 node_id = 3;
+    repeated string tags = 4;
+}
+
+message Data {
+    required Header header = 1;
+    required Payload payload = 2;
+}
+                       `)
+
 var argv = require('optimist')
     .default('root','/tmp/messages')
     .default('writer',0)
