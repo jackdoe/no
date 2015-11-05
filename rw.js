@@ -490,10 +490,13 @@ var acceptor = http.createServer(function (request, response) {
             var s = get_store_obj(t, NAME_TO_STORE);
             var encoded = s.append(body, tags, is_receiving_replica);
             WCOUNTER++;
-            var errors = [];
+            var errors = [], connections = [];
+            var timeout_timer = undefined;
             var ack = function() {
                 response.writeHead(200, {"Content-Type": "application/json"});
                 response.end(JSON.stringify({offset: s.position, fn: s.fn, errors: errors, encoded_length: encoded.length}));
+                if (timeout_timer)
+                    clearTimeout(timeout_timer);
             }
 
             if (query.ack_before_replication)
@@ -502,6 +505,12 @@ var acceptor = http.createServer(function (request, response) {
             if (!is_receiving_replica && POOL.length > 0 && do_n_replicas > 0) {
                 var need = Math.min(wait_for_n_replicas, POOL.length, do_n_replicas);
                 var left = Math.min(POOL.length, do_n_replicas);
+                timeout_timer = setTimeout(function() {
+                    connections.forEach(function(c) {
+                        c.abort()
+                    });
+                }, per_replica_timeout_ms + 10);
+
                 for (var idx = 0; idx < do_n_replicas && idx < POOL.length; idx++) {
                     // always send to the same items from the pool
                     // must randomize the pool arguments per box in order to balance
@@ -509,6 +518,7 @@ var acceptor = http.createServer(function (request, response) {
                         host: POOL[idx].host,
                         port: POOL[idx].port,
                         method: 'POST',
+                        timer: timeout_timer,
                         path: '/?replica=' + (idx + 1), body: encoded}, function (replica_response) {
                             var data = '';
                             replica_response.on('data', function(chunk) { data += chunk; });
@@ -527,7 +537,7 @@ var acceptor = http.createServer(function (request, response) {
                                     ack();
                             });
                         });
-
+                    connections.push(rr);
                     rr.on('socket', function (socket) {
                         socket.setTimeout(per_replica_timeout_ms);
                         socket.on('timeout', function() {
@@ -535,13 +545,11 @@ var acceptor = http.createServer(function (request, response) {
                         });
                     });
 
-                    if (!query.ack_before_replication) {
-                        rr.on('error', function (err) {
-                            errors.push(err.message)
-                            if (--left == 0)
-                                ack();
-                        });
-                    }
+                    rr.on('error', function (err) {
+                        errors.push(err.message)
+                        if (--left == 0 && !query.ack_before_replication)
+                            ack();
+                    });
 
                     rr.write(encoded);
                     rr.end();
