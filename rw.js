@@ -40,15 +40,19 @@ Array.prototype.random = function () {
 
 function Store(time_id) {
     this.time_id = time_id;
-    try {
+    if (!fs.existsSync(ROOT + time_id))
         fs.mkdirSync(ROOT + time_id);
-    } catch(e) {
-
-    };
     this.fn = ROOT + time_id + '/main.txt';
     this.fd = fs.openSync(this.fn, 'a+')
     this.position = fs.statSync(this.fn).size;
     this.fd_tags = {}
+}
+
+Store.prototype.fsyncSync = function() {
+    for (var k in this.fd_tags) {
+        fs.fsyncSync(this.fd_tags[k]);
+    }
+    fs.fsyncSync(this.fd);
 }
 
 Store.prototype.cleanup = function() {
@@ -93,10 +97,10 @@ Store.prototype.append = function(data, tags, replica) {
     if (fs.writeSync(this.fd, encoded, 0, encoded.length, this.position + blen.length) != encoded.length)
         this.log("failed to write " + encoded.length + " bytes", 0);
 
-    var buf = new Buffer(4);
+    var buf = new Buffer(6);
     buf.fill(0);
-    buf.writeUInt32BE(this.position, 0);
-
+    buf.writeUInt32BE(this.position & 0xFFFFFFFF, 0);
+    buf.writeUInt16BE(this.position >> 32, 4);
     this.position += encoded.length + blen.length;
 
     for (var i = 0; i < tags.length; i++) {
@@ -107,7 +111,7 @@ Store.prototype.append = function(data, tags, replica) {
                 fd = fs.openSync(fn_for_tag(this.time_id, tag),'a');
                 this.fd_tags[tag] = fd;
             }
-            fs.writeSync(fd,buf,0, 4); // A write that's under the size of 'PIPE_BUF' is supposed to be atomic
+            fs.writeSync(fd,buf, 0, buf.length); // A write that's under the size of 'PIPE_BUF' is supposed to be atomic
         }
     }
 
@@ -141,10 +145,10 @@ var get_store_obj = function(time_id, cache) {
 }
 
 var ts_to_id = function (ts) {
-    return Math.floor(ts / 10);
+    return Math.floor(ts / 60);
 }
 var time = function() {
-    return ts_to_id(Math.floor(Date.now() / 1000)); // in 10s of time_ids
+    return ts_to_id(Math.floor(Date.now() / 1000));
 }
 
 var time_inc = function(from) {
@@ -186,7 +190,7 @@ function Term(tag) {
     this.tag = tag;
     this.time_id = time();
     this.fd = -1;
-    this.buffer = new Buffer(4);
+    this.buffer = new Buffer(6);
     this.from = undefined;
     this.to = undefined;
     this.size = 0;
@@ -230,15 +234,15 @@ function Term(tag) {
 
     this.next = function () {
         if (this.reopen_if_needed()) {
-            if (this.left() >= 4) {
+            if (this.left() >= 6) {
                 this.buffer.fill(0);
 
-                var n_read = fs.readSync(this.fd,this.buffer,0,4,this.offset);
-                if (n_read != 4) throw(new Error("failed to read 4 bytes, got:" + n_read + " size: " + size + " at offset: " + this.offset));
+                var n_read = fs.readSync(this.fd,this.buffer,0,6,this.offset);
+                if (n_read != 6) throw(new Error("failed to read 6 bytes, got:" + n_read + " size: " + size + " at offset: " + this.offset));
 
-                this.offset += 4;
+                this.offset += 6;
                 this.doc_id.time_id = this.time_id;
-                this.doc_id.offset = this.buffer.readUInt32BE(0);
+                this.doc_id.offset = (this.buffer.readUInt16BE(4) << 32) | this.buffer.readUInt32BE(0);
                 return this.doc_id;
             }
         }
