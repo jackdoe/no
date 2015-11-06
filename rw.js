@@ -406,15 +406,23 @@ var searcher = http.createServer(function (request, response) {
     var body = '';
     request.on('data', function (data) { body += data; });
     var done = false;
-    var i;
+    var i = undefined;
     var cache = {};
+    var cleanup = function() {
+        if (i)
+            timers.clearInterval(i);
+        for (var k in cache) {
+            cache[k].cleanup();
+        }
+    };
+
     request.on('end', function () {
         try {
             obj = JSON.parse(body);
             var q = parse(obj);
             q.set_time_id_range(qs.from,qs.to);
             console.log(q.to_string());
-            var i = setInterval(function() {
+            i = setInterval(function() {
                 try {
                     var n;
                     do {
@@ -448,15 +456,12 @@ var searcher = http.createServer(function (request, response) {
         } catch(e) {
             err_handler(response,e,undefined);
         };
-        var cleanup = function() {
-            timers.clearInterval(i);
-            for (var k in cache) {
-                cache[k].cleanup();
-            }
-        };
         response.on('error', function() { cleanup() });
         response.on('end', function() { cleanup() });
     });
+    request.connection.on('close',function(){ cleanup() });
+
+
 });
 
 var acceptor = http.createServer(function (request, response) {
