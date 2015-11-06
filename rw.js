@@ -123,8 +123,9 @@ Store.prototype.append = function(data, tags, replica) {
 
     var buf = new Buffer(6);
     buf.fill(0);
-    buf.writeUInt32BE(this.position & 0xFFFFFFFF, 0);
-    buf.writeUInt16BE(this.position >> 32, 4);
+    buf.writeUInt16BE(this.position & 0xFFFF, 0);
+    buf.writeUInt32BE(this.position >> 16, 2);
+
     this.position += encoded.length + blen.length;
 
     for (var i = 0; i < tags.length; i++) {
@@ -266,7 +267,8 @@ function Term(tag) {
 
                 this.offset += 6;
                 this.doc_id.time_id = this.time_id;
-                this.doc_id.offset = (this.buffer.readUInt16BE(4) << 32) | this.buffer.readUInt32BE(0);
+
+                this.doc_id.offset = (this.buffer.readUInt32BE(2) << 16) | this.buffer.readUInt16BE(0);
                 return this.doc_id;
             }
         }
@@ -428,6 +430,7 @@ var searcher = http.createServer(function (request, response) {
             var q = parse(obj);
             q.set_time_id_range(qs.from,qs.to);
             console.log(q.to_string());
+            var lbuf = new Buffer(4);
             var i = setInterval(function() {
                 try {
                     var n;
@@ -445,6 +448,11 @@ var searcher = http.createServer(function (request, response) {
                             if (qs.json) {
                                 response.write(JSON.stringify(messages.Data.decode(bytes)));
                             } else {
+                                if (qs.tlv) {
+                                    lbuf.fill(0);
+                                    lbuf.writeUInt32BE(bytes.length);
+                                    response.write(lbuf);
+                                }
                                 response.write(bytes);
                             }
                         }
@@ -518,8 +526,7 @@ var acceptor = http.createServer(function (request, response) {
                         host: POOL[idx].host,
                         port: POOL[idx].port,
                         method: 'POST',
-                        timer: timeout_timer,
-                        path: '/?replica=' + (idx + 1), body: encoded}, function (replica_response) {
+                        path: '/?replica=' + (idx + 1) }, function (replica_response) {
                             var data = '';
                             replica_response.on('data', function(chunk) { data += chunk; });
                             replica_response.on('end', function() {
