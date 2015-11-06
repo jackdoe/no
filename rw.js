@@ -336,8 +336,10 @@ function BoolAnd() {
                 if (this.or.queries[i].doc_id.equals(new_doc))
                     n++;
             }
-            if (n = this.or.queries.length)
-                return this.doc_id = new_doc;
+            if (n == this.or.queries.length) {
+                this.doc_id.set(new_doc);
+                return this.doc_id;
+            }
         }
     }
 
