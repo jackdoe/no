@@ -430,7 +430,6 @@ var searcher = http.createServer(function (request, response) {
             var q = parse(obj);
             q.set_time_id_range(qs.from,qs.to);
             console.log(q.to_string());
-            var lbuf = new Buffer(4);
             var i = setInterval(function() {
                 try {
                     var n;
@@ -449,11 +448,12 @@ var searcher = http.createServer(function (request, response) {
                                 response.write(JSON.stringify(messages.Data.decode(bytes)));
                             } else {
                                 if (qs.tlv) {
+                                    var lbuf = new Buffer(4);
                                     lbuf.fill(0);
                                     lbuf.writeUInt32BE(bytes.length);
-                                    response.write(lbuf);
+                                    response.write(lbuf, 'binary');
                                 }
-                                response.write(bytes);
+                                response.write(bytes, 'binary');
                             }
                         }
                     } while(n != PAUSE);
@@ -464,12 +464,14 @@ var searcher = http.createServer(function (request, response) {
         } catch(e) {
             err_handler(response,e,undefined);
         };
-        response.on('end', function() {
+        var cleanup = function() {
             timers.clearInterval(i);
             for (var k in cache) {
                 cache[k].cleanup();
             }
-        })
+        };
+        response.on('error', function() { cleanup() });
+        response.on('end', function() { cleanup() });
     });
 });
 
@@ -558,7 +560,7 @@ var acceptor = http.createServer(function (request, response) {
                             ack();
                     });
 
-                    rr.write(encoded);
+                    rr.write(encoded, 'binary');
                     rr.end();
                 }
             } else {

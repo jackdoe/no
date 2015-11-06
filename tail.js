@@ -28,34 +28,27 @@ var rr = http.request(
         method: 'POST',
         path: '/?tlv=1',
     },function (res) {
-
         var data = new Buffer(0);
         var need = -1;
 
         res.on('data', function(chunk) {
             data = Buffer.concat([data,chunk]);
-
             AGAIN: while(true) {
                 if (need == -1 && data.length >= 4) {
                     need = data.readUInt32BE(0);
                     data = data.slice(4);
                 }
-                if (data.length >= need) {
-                    var slice = data.slice(0, need);
-                    var decoded = messages.Data.decode(slice);
-                    console.log(decoded);
+                if (need != -1 && data.length >= need) {
+                    console.log(messages.Data.decode(data.slice(0,need)));
                     data = data.slice(need);
                     need = -1;
-                    if (data.length >= 4) {
-                        console.log("AGAIN");
+                    if (data.length >= 4)
                         continue AGAIN;
-                    }
                 }
                 break;
             }
         });
         res.on('end', function() {
-            console.log("END");
         });
     });
 
