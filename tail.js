@@ -1,24 +1,8 @@
 var http = require('http');
 var protobuf = require('protocol-buffers')
-
-// XXX: use external file
-var messages = protobuf(`
-message Payload {
-    required bytes data = 4;
-}
-
-message Header {
-    required uint64 time_id = 1;
-    required uint64 offset = 2;
-    required uint64 node_id = 3;
-    repeated string tags = 4;
-}
-
-message Data {
-    required Header header = 1;
-    required Payload payload = 2;
-}
-`);
+var fs = require('fs');
+var path = require('path');
+var messages = protobuf(fs.readFileSync(path.resolve(__dirname, 'data.proto')));
 
 // node tail.js localhost 8002 '{"tag":"a"}'
 var rr = http.request(
