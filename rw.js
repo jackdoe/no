@@ -15,7 +15,7 @@ var path = require('path');
 var messages = protobuf(fs.readFileSync(path.resolve(__dirname, 'data.proto')));
 
 var argv = require('optimist')
-    .default('root','/tmp/messages')
+    .default('root','/tmp/messages/')
     .default('writer',0)
     .default('udp',0)
     .default('searcher',0)
@@ -203,6 +203,7 @@ function Term(tag) {
     this.from = undefined;
     this.to = undefined;
     this.size = 0;
+    this.not_initialized = true;
 
     this.set_time_id_range = function(from,to) {
         this.from = parseInt(from) || time();
@@ -210,38 +211,70 @@ function Term(tag) {
         if (to)
             this.to = parseInt(to);
     }
+
     this.left = function() { return this.size - this.offset };
-    this.reopen_if_needed = function() {
-        if (this.fd > 0) {
-            if (this.left() == 0) {
-                this.size = fs.fstatSync(this.fd).size;
-                if (this.left() > 0)
-                    return true;
-            }
-            if (this.time_id == time())
+
+    this.has_something_left_in_current_file = function() {
+        if (this.fd <= 0)
+            return false;
+
+        if (this.left() > 0)
+            return true;
+
+        this.size = fs.fstatSync(this.fd).size;
+        return this.left() > 0;
+    }
+
+    this.pick_closest_non_zero_file = function(temp_time_id) {
+        var end = this.to || time_inc(time());
+
+        while(temp_time_id < end) {
+            if (this.open_time_id(temp_time_id))
                 return true;
+            temp_time_id = time_inc(temp_time_id);
         }
 
-        var end = this.to || time();
-        var old_time_id = this.time_id;
-        while(this.time_id <= end) {
-            var name = fn_for_tag(this.time_id, this.tag);
-            if (fs.existsSync(name)) {
-                if (this.fd > 0)
-                    fs.closeSync(this.fd);
-                this.fd = fs.openSync(name, 'r');
-                this.size = fs.fstatSync(this.fd).size;
-                if (this.time_id != old_time_id)
-                    this.offset = 0;
-                if (this.left() > 0)
-                    return true;
-            }
-            this.time_id = time_inc(this.time_id);
+        return false;
+    }
+
+    this.open_time_id = function(tid) {
+        if (this.fd > 0) {
+            fs.closeSync(this.fd);
+            this.fd = -1;
+        }
+
+        var name = fn_for_tag(tid, this.tag);
+        if (fs.existsSync(name)) {
+            this.time_id = tid;
+            this.fd = fs.openSync(name, 'r');
+            this.size = fs.fstatSync(this.fd).size;
+            this.offset = 0;
+            return true;
         }
         return false;
     }
 
+    this.reopen_if_needed = function() {
+        if (this.not_initialized) {
+            if (!this.pick_closest_non_zero_file(this.time_id)) {
+                this.time_id = time();
+                return false;
+            }
+            this.not_initialized = false;
+        }
+
+        if (this.has_something_left_in_current_file())
+            return true;
+
+        return this.pick_closest_non_zero_file(time_inc(this.time_id));
+    }
+
     this.next = function () {
+        if (this.to && this.time_id >= this.to) {
+            this.doc_id.reset();
+            return this.doc_id;
+        }
+
         if (this.reopen_if_needed()) {
             if (this.left() >= 6) {
                 this.buffer.fill(0);
@@ -257,10 +290,6 @@ function Term(tag) {
             }
         }
 
-        if (this.to && this.time_id >= this.to) {
-            this.doc_id.reset();
-            return this.doc_id;
-        }
         return PAUSE;
     }
     this.to_string = function () {
@@ -359,6 +388,7 @@ var parseAnd = function(obj) {
     }
     return b;
 }
+
 var parseOr = function(obj) {
     if (obj.length == 1)
         return parse(obj[0]);
