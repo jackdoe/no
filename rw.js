@@ -28,7 +28,7 @@ message Data {
     required Header header = 1;
     required Payload payload = 2;
 }
-                       `)
+`);
 
 var argv = require('optimist')
     .default('root','/tmp/messages')
@@ -40,7 +40,7 @@ var argv = require('optimist')
 
 var WCOUNTER = 0;
 var RCOUNTER = 0;
-var NAME_TO_STORE = {}
+var NAME_TO_STORE = {};
 var ROOT = argv.root;
 var PAUSE = -1;
 
