@@ -169,8 +169,8 @@ var time_dec = function(from) {
 }
 
 function DocumentIdentifier() {
-    this.time_id = Number.MAX_VALUE;
-    this.offset = Number.MAX_VALUE;
+    this.time_id = -1;
+    this.offset = -1;
 
     this.equals = function(other) {
         return this.time_id == other.time_id && this.offset == other.offset;
@@ -181,15 +181,33 @@ function DocumentIdentifier() {
             return this.offset - other.offset
         return this.time_id - other.time_id;
     }
+
     this.reset = function() {
         this.time_id = Number.MAX_VALUE;
         this.offset = Number.MAX_VALUE;
     }
+
     this.set = function(other) {
         this.time_id = other.time_id;
         this.offset = other.offset;
     }
 
+    this.no_more = function() {
+        return this.time_id == Number.MAX_VALUE;
+    }
+
+    this.set_from_hash = function(other) {
+        this.time_id = parseInt(other.time_id);
+        this.offset = parseInt(other.offset);
+    }
+
+    this.to_string = function() {
+        if (this.no_more())
+            return  "NO_MORE";
+        if (this.time_id == -1)
+            return "NO_INIT";
+        return "time_id: " + this.time_id + ",offset: " + this.offset;
+    }
 }
 
 function Term(tag) {
@@ -204,15 +222,30 @@ function Term(tag) {
     this.to = undefined;
     this.size = 0;
     this.not_initialized = true;
+    this.is_pausable = true;
 
     this.set_time_id_range = function(from,to) {
         this.from = parseInt(from) || time();
         this.time_id = this.from;
-        if (to)
+        if (to) {
             this.to = parseInt(to);
+        }
+    }
+    this.set_pausable = function() {
+        if (this.to && this.to < time())
+            this.is_pausable = false;
     }
 
     this.left = function() { return this.size - this.offset };
+
+    this.jump = function(to_doc_id) {
+        if (this.doc_id.equals(to_doc_id))
+            return this.doc_id;
+
+        this.time_id = to_doc_id.time_id;
+        this.offset = to_doc_id.offset;
+        return this.next();
+    };
 
     this.has_something_left_in_current_file = function() {
         if (this.fd <= 0)
@@ -270,6 +303,9 @@ function Term(tag) {
     }
 
     this.next = function () {
+        if (this.doc_id.no_more())
+            return this.doc_id;
+
         if (this.to && this.time_id >= this.to) {
             this.doc_id.reset();
             return this.doc_id;
@@ -290,10 +326,67 @@ function Term(tag) {
             }
         }
 
+        if (!this.is_pausable) {
+            this.doc_id.reset();
+            return this.doc_id;
+        }
         return PAUSE;
     }
     this.to_string = function () {
-        return "tag:" + this.tag + "@" + (this.from || 0) + ":" + (this.to || 0);
+        return "tag:" + this.tag + "@" + (this.from || 0) + ":" + (this.to || 0) + "#" + this.doc_id.to_string();
+    }
+}
+
+function TermOffsetTimeId(list) {
+    this.is_pausable = false;
+    this.list = list.sort(function(a,b) {
+        var v = parseInt(a.time_id) - parseInt(b.time_id);
+        if (v != 0)
+            return v;
+        return parseInt(a.offset) - parseInt(b.offset);
+    });
+
+    this.doc_id = new DocumentIdentifier();
+    this.cursor = -1;
+    this.set_pausable = function() {}
+    this.set_time_id_range = function(from,to) {
+        // XXX: does it make sense to honor from/to here?
+    }
+
+    this.jump = function(to_doc_id) {
+        if (this.doc_id.no_more())
+            return this.doc_id;
+
+        // XXX: bsearch
+        while (cursor < this.list.length) {
+            this.doc_id.set_from_hash(this.list[cursor]);
+            if (this.doc_id.equals(to_doc_id))
+                return this.doc_id;
+            if (this.doc_id.cmp(to_doc_id) >= 0)
+                return this.doc_id;
+            cursor++;
+        }
+
+        this.doc_id.reset();
+        return this.doc_id;
+    }
+
+    this.next = function () {
+        if (this.doc_id.no_more())
+            return this.doc_id;
+
+        if (this.cursor + 1 >= this.list.length) {
+            this.doc_id.reset();
+            return this.doc_id;
+        }
+
+        this.cursor++;
+        this.doc_id.set_from_hash(this.list[this.cursor]);
+        return this.doc_id;
+    }
+
+    this.to_string = function () {
+        return "{list:" + JSON.stringify(this.list) + "@" + (this.from || 0) + ":" + (this.to || 0)+ "#" + this.doc_id.to_string() + "}";
     }
 }
 
@@ -301,9 +394,43 @@ function BoolOr() {
     this.queries = [];
     this.doc_id = new DocumentIdentifier();
     this.new_doc = new DocumentIdentifier();
+    this.is_pausable = false;
+    this.set_pausable = function() {
+        if (this.queries.length == 0) {
+            this.is_pausable = false;
+        } else {
+            var n_not_pausable = 0;
+            for (var i = 0; i < this.queries.length; i++) {
+                this.queries[i].set_pausable();
+                if (!this.queries[i].is_pausable)
+                    n_not_pausable++;
+            }
+            this.is_pausable = !(n_not_pausable == this.queries.length);
+        }
+    }
 
     this.add = function(query) {
         this.queries.push(query);
+    }
+
+    this.jump = function(to_doc_id) {
+        if (to_doc_id.no_more()) {
+            this.doc_id.reset();
+            return this.doc_id;
+        }
+
+        while(true) {
+            if (this.doc_id.no_more())
+                return this.doc_id;
+
+            if (this.doc_id.equals(to_doc_id))
+                return this.doc_id;
+
+            if (this.doc_id.cmp(to_doc_id) >= 0)
+                return this.doc_id;
+
+            this.next();
+        }
     }
 
     this.set_time_id_range = function(from,to) {
@@ -312,6 +439,9 @@ function BoolOr() {
     }
 
     this.next = function () {
+        if (this.doc_id.no_more())
+            return this.doc_id;
+
         // XXX: this blocks until all of the queries are not pausing
         this.new_doc.reset();
         var has_one_pause = false;
@@ -330,22 +460,34 @@ function BoolOr() {
                     cur_doc = tmp;
                 }
             }
-            if (cur_doc.cmp(this.new_doc) <= 0) this.new_doc.set(cur_doc);
+            if (cur_doc.cmp(this.new_doc) <= 0)
+                this.new_doc.set(cur_doc);
         }
-        if (has_one_pause)
+
+        if (has_one_pause) {
+            if (!this.is_pausable) {
+                this.doc_id.reset();
+                return this.doc_id;
+            }
+
             return PAUSE;
+        }
         this.doc_id.set(this.new_doc);
         return this.doc_id;
     }
 
     this.to_string = function () {
-        return "OR(" + this.queries.map(function(e) { return e.to_string() }).join(",") + ")";
+        return "{OR(" + this.queries.map(function(e) { return e.to_string() }).join(",") + ")" + "#" + this.doc_id.to_string() +"}";
     }
 }
 
 function BoolAnd() {
     this.or = new BoolOr();
     this.doc_id = new DocumentIdentifier();
+
+    this.set_pausable = function() {
+        this.or.set_pausable();
+    }
 
     this.add = function(query) {
         this.or.add(query);
@@ -355,67 +497,81 @@ function BoolAnd() {
         this.or.set_time_id_range(from,to);
     }
 
-    this.next = function () {
-        while(true) {
-            var new_doc = this.or.next();
-            if (new_doc == PAUSE) return new_doc;
+    this.jump = function(to_doc_id) {
+        return this.next_with_target(this.or.jump(to_doc_id));
+    }
 
-            var n = 0;
-            for (var i = 0; i < this.or.queries.length; i++) {
-                if (this.or.queries[i].doc_id.equals(new_doc))
-                    n++;
+    this.next = function () {
+        return this.next_with_target(this.or.next());
+    }
+
+    this.next_with_target = function (to_doc_id) {
+        if (to_doc_id == PAUSE)
+            return to_doc_id;
+
+        if (to_doc_id.no_more()) {
+            this.doc_id.reset();
+            return this.doc_id;
+        }
+
+        if (this.doc_id.no_more())
+            return this.doc_id;
+
+        var new_doc = to_doc_id;
+        while(true) {
+            if (new_doc.no_more()) {
+                this.doc_id.set(new_doc);
+                return this.doc_id;
             }
+            var n = 0;
+            var biggest = undefined;
+            for (var i = 0; i < this.or.queries.length; i++) {
+                var qdoc_id = this.or.queries[i].doc_id;
+                if (qdoc_id.equals(new_doc))
+                    n++;
+                if (!biggest || qdoc_id.cmp(biggest) > 0)
+                    biggest = qdoc_id
+            }
+
             if (n == this.or.queries.length) {
                 this.doc_id.set(new_doc);
                 return this.doc_id;
+            } else {
+                new_doc = this.or.jump(biggest);
             }
         }
     }
 
     this.to_string = function () {
-        return "AND[" + this.or.to_string() +"]";
+        return "{AND[" + this.or.to_string() +"]" + "#" + this.doc_id.to_string() +"}";
     }
-}
-
-
-var parseAnd = function(obj) {
-    if (obj.length == 1)
-        return parse(obj[0]);
-
-    var b = new BoolAnd();
-    for (var i = 0; i < obj.length; i++) {
-        b.add(parse(obj[i]));
-    }
-    return b;
-}
-
-var parseOr = function(obj) {
-    if (obj.length == 1)
-        return parse(obj[0]);
-
-    var b = new BoolOr();
-    for (var i = 0; i < obj.length; i++) {
-        b.add(parse(obj[i]));
-    }
-    return b;
 }
 
 var parse = function(obj) {
-    var b = new BoolOr();
+    var q;
     if (obj.tag) {
-        b.add(new Term(obj.tag));
+        q = new Term(obj.tag);
+    } else if (obj.list) {
+        q = new TermOffsetTimeId(obj.list);
     } else {
-        if (obj.and) {
-            b.add(parseAnd(obj.and))
-        } else if (obj.or) {
-            b.add(parseOr(obj.or));
+        if (!obj.and && !obj.or)
+            throw(new Error("dont know what to do with " + JSON.stringify(obj)));
+
+        var arr = obj.and ? obj.and : obj.or;
+        if (arr.length == 1) {
+            q = parse(arr[0]);
+        } else {
+            q = obj.and ? new BoolAnd() : new BoolOr();
+            for (var i = 0; i < arr.length; i++) {
+                q.add(parse(arr[i]));
+            }
         }
     }
-    if (b.queries.length == 1)
-
-        return b.queries[0];
-    return b;
+    if (obj.from || obj.to)
+        q.set_time_id_range(obj.from, obj.to);
+    return q;
 }
+
 var err_handler = function(response, e, interval, do_not_terminate) {
     var msg = (e instanceof Error ? e.stack : e);
     if (!do_not_terminate)
@@ -441,10 +597,28 @@ var searcher = http.createServer(function (request, response) {
     var i = undefined;
     var cache = {};
     var cleanup = function() {
-        if (i)
+        if (i) {
             timers.clearInterval(i);
+            i = undefined;
+        }
         for (var k in cache) {
             cache[k].cleanup();
+            delete cache[k];
+        }
+    };
+
+    var send = function(bytes) {
+        RCOUNTER++;
+        if (qs.json) {
+            response.write(JSON.stringify(messages.Data.decode(bytes)));
+        } else {
+            if (qs.tlv) {
+                var lbuf = new Buffer(4);
+                lbuf.fill(0);
+                lbuf.writeUInt32BE(bytes.length);
+                response.write(lbuf, 'binary');
+            }
+            response.write(bytes, 'binary');
         }
     };
 
@@ -452,33 +626,19 @@ var searcher = http.createServer(function (request, response) {
         try {
             obj = JSON.parse(body);
             var q = parse(obj);
-            q.set_time_id_range(qs.from,qs.to);
-            console.log(q.to_string());
+            q.set_pausable();
             i = setInterval(function() {
                 try {
                     var n;
                     do {
                         var n = q.next()
-                        if (n.time_id == Number.MAX_VALUE) {
-                            response.end();
-                            clearInterval(i);
-                            break;
-                        }
-
                         if (n != PAUSE) {
-                            var bytes = get_store_obj(n.time_id,cache).get(n.offset);
-                            RCOUNTER++;
-                            if (qs.json) {
-                                response.write(JSON.stringify(messages.Data.decode(bytes)));
-                            } else {
-                                if (qs.tlv) {
-                                    var lbuf = new Buffer(4);
-                                    lbuf.fill(0);
-                                    lbuf.writeUInt32BE(bytes.length);
-                                    response.write(lbuf, 'binary');
-                                }
-                                response.write(bytes, 'binary');
+                            if (n.no_more()) {
+                                response.end();
+                                cleanup();
+                                break;
                             }
+                            send(get_store_obj(n.time_id,cache).get(n.offset));
                         }
                     } while(n != PAUSE);
                 } catch (e) {
