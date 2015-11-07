@@ -513,9 +513,12 @@ var acceptor = http.createServer(function (request, response) {
                 var decoded = messages.Data.decode(body);
                 t = decoded.header.time_id
                 tags = decoded.header.tags;
+                tags = tags.filter(function(e) { return e != "__r0" });
+                tags.push("__r" + is_receiving_replica);
             } else {
                 t = time();
                 tags = (query.tags instanceof Array ? query.tags : [query.tags] ).filter(function(e) { return e });
+                tags.push("__r0");
             }
 
             var s = get_store_obj(t, NAME_TO_STORE);
