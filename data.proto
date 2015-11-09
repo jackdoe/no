@@ -1,12 +1,17 @@
+message ArrayOfIndexes {
+    repeated uint32 indexes;
+}
+
 message Payload {
-    repeated string tags = 2;
-    required bytes data = 1;
+    repeated string tags = 1;
+    required bytes data = 2;
 }
 
 message Header {
     required uint64 time_id = 1;
     required uint64 offset = 2;
     required uint64 node_id = 3;
+    map<string, ArrayOfIndexes> tags_to_indexes = 4;
 }
 
 message Data {

@@ -1,6 +1,6 @@
 // curl -XGET -d '{"and":[{"or":[{"tag":"a"}]},{"or":[{"tag":"b"},{"tag":"a"}]}]}' http://localhost:8001/' # query AND(OR(a),OR(b,a))
 // curl -XGET -d '{"tag":"any"}' http://localhost:8001/' # query a
-// curl -XGET -d '{blablabla}' 'http://localhost:8000/?tags=a&tags=b' # send messages with tags a and b
+// curl -XGET -d '[{"tags":["a","b"],"data":"asdasd"}]' 'http://localhost:8000/' # send messages with tags a and b
 // echo -n "hello" >/dev/udp/localhost/8003
 
 var protobuf = require('protocol-buffers')
@@ -84,15 +84,34 @@ Store.prototype.log = function(msg, level) {
 Store.prototype.append = function(data, replica) {
     if (data.length > 0xFFFFFF || data.length == 0)
         this.log("data.length("+data.length+") > 0xFFFFFF",0);
-    var encoded;
+    var encoded,tags_to_indexes;
     if (replica) {
-        encoded = data;
+        encoded = messages.Data.encode(data);
+        tags_to_indexes = data.header.tags_to_indexes
     } else {
+        tags_to_indexes = {};
+
+        for(var i=0; i<data.length; i++) {
+            var tags = data[i].tags;
+            for (var j = 0; j < tags.length; j++) {
+                var tag = tags[j];
+                if (!(tag in tags_to_indexes))
+                    tags_to_indexes[tag] = {indexes: []};
+                tags_to_indexes[tag].indexes.push(i);
+            }
+        }
+
         encoded = messages.Data.encode({
-            header: {time_id: this.time_id, offset: this.position, node_id: NODE_ID},
+            header: {
+                time_id: this.time_id,
+                offset: this.position,
+                node_id: NODE_ID,
+                tags_to_indexes: tags_to_indexes,
+            },
             payload: data,
         });
     }
+
     // XXX: make the protobuf decoder understand streams and offsets, instead of writing the length here
     var blen = new Buffer(4);
     blen.fill(0);
@@ -112,11 +131,7 @@ Store.prototype.append = function(data, replica) {
 
     this.position += encoded.length + blen.length;
 
-    var tags = [];
-    for(var i=0; i<data.length; i++) {
-        tags = tags.concat(data[i]["tags"]);
-    }
-
+    var tags = Object.keys(tags_to_indexes);
     // XXX: Encode the payload index in each tag to make sub-addressing easy.
     for (var i = 0; i < tags.length; i++) {
         var tag = tags[i];
@@ -614,18 +629,56 @@ var searcher = http.createServer(function (request, response) {
     };
 
     var send = function(bytes) {
-        RCOUNTER++;
-        if (qs.json) {
-            response.write(JSON.stringify(messages.Data.decode(bytes)));
-        } else {
-            if (qs.tlv) {
-                var lbuf = new Buffer(4);
-                lbuf.fill(0);
-                lbuf.writeUInt32BE(bytes.length);
-                response.write(lbuf, 'binary');
+        if (qs.sub) {
+            if (!(sub instanceof Array))
+                sub = [sub];
+            var decoded = messages.Data.decode(bytes);
+
+            var payload_at = [];
+            var seen = {};
+            // keep order
+            var sub = qs.sub;
+
+            for (var i = 0; i < sub.length; i++) {
+                if (sub[i] in decoded.header.tags_to_indexes) {
+                    var indexes = decoded.header.tags_to_indexes[sub[i]].indexes;
+                    for (var j = 0; j < indexes.length;  j++) {
+                        if (!(i in seen)) {
+                            payload_at.push(indexes[j]);
+                            seen[i] = true;
+                        }
+                    }
+                }
             }
-            response.write(bytes, 'binary');
+
+            var payload = [];
+            for (var i = 0; i < payload_at.length; i++) {
+                payload.push(decoded.payload[payload_at[i]]);
+            }
+
+            var output = {
+                header: decoded.header,
+                payload: payload
+            };
+            if (qs.json) {
+                bytes = JSON.stringify(output)
+            } else {
+                bytes = messages.Data.encode(output);
+            }
+        } else {
+            if (qs.json)
+                bytes = JSON.stringify(messages.Data.decode(bytes))
         }
+
+        RCOUNTER++;
+
+        if (qs.tlv) {
+            var lbuf = new Buffer(4);
+            lbuf.fill(0);
+            lbuf.writeUInt32BE(bytes.length);
+            response.write(lbuf, 'binary');
+        }
+        response.write(bytes, 'binary');
     };
 
     request.on('end', function () {
@@ -673,24 +726,18 @@ var acceptor = http.createServer(function (request, response) {
     request.on('data', function (data) { body = Buffer.concat([body,data]) });
     request.on('end', function () {
         try {
-            var tags,t;
+            var decoded,t;
 
             if (is_receiving_replica) {
-                var decoded = messages.Data.decode(body);
+                decoded = messages.Data.decode(body);
                 t = decoded.header.time_id
-                tags = decoded.header.tags;
-                tags = tags.filter(function(e) { return e != "__r0" });
-                tags.push("__r" + is_receiving_replica);
             } else {
-                var myparsed = JSON.parse(body)
-
+                decoded = JSON.parse(body)
                 t = time();
-                tags = (query.tags instanceof Array ? query.tags : [query.tags] ).filter(function(e) { return e });
-                tags.push("__r0");
             }
 
             var s = get_store_obj(t, NAME_TO_STORE);
-            var encoded = s.append(myparsed, is_receiving_replica);
+            var encoded = s.append(decoded, is_receiving_replica);
             WCOUNTER++;
             var errors = [], connections = [];
             var timeout_timer = undefined;
