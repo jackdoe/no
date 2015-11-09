@@ -81,7 +81,7 @@ Store.prototype.log = function(msg, level) {
         console.log(msg);
 }
 
-Store.prototype.append = function(data, tags, replica) {
+Store.prototype.append = function(data, replica) {
     if (data.length > 0xFFFFFF || data.length == 0)
         this.log("data.length("+data.length+") > 0xFFFFFF",0);
     var encoded;
@@ -89,8 +89,8 @@ Store.prototype.append = function(data, tags, replica) {
         encoded = data;
     } else {
         encoded = messages.Data.encode({
-            header: {tags: tags, time_id: this.time_id, offset: this.position, node_id: NODE_ID},
-            payload: {data: data },
+            header: {time_id: this.time_id, offset: this.position, node_id: NODE_ID},
+            payload: data,
         });
     }
     // XXX: make the protobuf decoder understand streams and offsets, instead of writing the length here
@@ -112,6 +112,12 @@ Store.prototype.append = function(data, tags, replica) {
 
     this.position += encoded.length + blen.length;
 
+    var tags = [];
+    for(var i=0; i<data.length; i++) {
+        tags = tags.concat(data[i]["tags"]);
+    }
+
+    // XXX: Encode the payload index in each tag to make sub-addressing easy.
     for (var i = 0; i < tags.length; i++) {
         var tag = tags[i];
         if (tag) {
@@ -120,7 +126,7 @@ Store.prototype.append = function(data, tags, replica) {
                 fd = fs.openSync(fn_for_tag(this.time_id, tag),'a');
                 this.fd_tags[tag] = fd;
             }
-            fs.writeSync(fd,buf, 0, buf.length); // A write that's under the size of 'PIPE_BUF' is supposed to be atomic
+            fs.writeSync(fd, buf, 0, buf.length); // A write that's under the size of 'PIPE_BUF' is supposed to be atomic
         }
     }
 
@@ -676,13 +682,15 @@ var acceptor = http.createServer(function (request, response) {
                 tags = tags.filter(function(e) { return e != "__r0" });
                 tags.push("__r" + is_receiving_replica);
             } else {
+                var myparsed = JSON.parse(body)
+
                 t = time();
                 tags = (query.tags instanceof Array ? query.tags : [query.tags] ).filter(function(e) { return e });
                 tags.push("__r0");
             }
 
             var s = get_store_obj(t, NAME_TO_STORE);
-            var encoded = s.append(body, tags, is_receiving_replica);
+            var encoded = s.append(myparsed, is_receiving_replica);
             WCOUNTER++;
             var errors = [], connections = [];
             var timeout_timer = undefined;
