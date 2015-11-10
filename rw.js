@@ -26,7 +26,6 @@ var WCOUNTER = 0;
 var RCOUNTER = 0;
 var NAME_TO_STORE = {};
 var ROOT = argv.root;
-var PAUSE = -1;
 
 var WRITER_PORT = argv.writer;
 var NODE_ID = argv.node_id;
@@ -81,36 +80,30 @@ Store.prototype.log = function(msg, level) {
         console.log(msg);
 }
 
-Store.prototype.append = function(data, replica) {
+Store.prototype.append = function(data) {
     if (data.length > 0xFFFFFF || data.length == 0)
         this.log("data.length("+data.length+") > 0xFFFFFF",0);
-    var encoded,tags_to_indexes;
-    if (replica) {
-        encoded = messages.Data.encode(data);
-        tags_to_indexes = data.header.tags_to_indexes
-    } else {
-        tags_to_indexes = {};
 
-        for(var i=0; i<data.length; i++) {
-            var tags = data[i].tags;
-            for (var j = 0; j < tags.length; j++) {
-                var tag = tags[j];
-                if (!(tag in tags_to_indexes))
-                    tags_to_indexes[tag] = {indexes: []};
-                tags_to_indexes[tag].indexes.push(i);
-            }
+    var tags_to_indexes = {};
+    for(var i=0; i<data.length; i++) {
+        var tags = data[i].tags;
+        for (var j = 0; j < tags.length; j++) {
+            var tag = tags[j];
+            if (!(tag in tags_to_indexes))
+                tags_to_indexes[tag] = {indexes: []};
+            tags_to_indexes[tag].indexes.push(i);
         }
-
-        encoded = messages.Data.encode({
-            header: {
-                time_id: this.time_id,
-                offset: this.position,
-                node_id: NODE_ID,
-                tags_to_indexes: tags_to_indexes,
-            },
-            payload: data,
-        });
     }
+
+    var encoded = messages.Data.encode({
+        header: {
+            time_id: this.time_id,
+            offset: this.position,
+            node_id: NODE_ID,
+            tags_to_indexes: tags_to_indexes,
+        },
+        payload: data,
+    });
 
     // XXX: make the protobuf decoder understand streams and offsets, instead of writing the length here
     var blen = new Buffer(4);
@@ -175,7 +168,7 @@ var get_store_obj = function(time_id, cache) {
 }
 
 var ts_to_id = function (ts) {
-    return Math.floor(ts / 60);
+    return Math.floor(ts);
 }
 var time = function() {
     return ts_to_id(Math.floor(Date.now() / 1000));
@@ -236,25 +229,18 @@ function Term(tag) {
 
     this.offset = 0;
     this.tag = tag;
-    this.time_id = time();
+    this.time_id = time_dec(time());
     this.fd = -1;
     this.buffer = new Buffer(6);
     this.from = undefined;
     this.to = undefined;
     this.size = 0;
     this.not_initialized = true;
-    this.is_pausable = true;
 
     this.set_time_id_range = function(from,to) {
-        this.from = parseInt(from) || time();
+        this.from = parseInt(from) || time_dec(time());
         this.time_id = this.from;
-        if (to) {
-            this.to = parseInt(to);
-        }
-    }
-    this.set_pausable = function() {
-        if (this.to && this.to < time())
-            this.is_pausable = false;
+        this.to = to ? parseInt(to) : time();
     }
 
     this.left = function() { return this.size - this.offset };
@@ -272,17 +258,12 @@ function Term(tag) {
         if (this.fd <= 0)
             return false;
 
-        if (this.left() > 0)
-            return true;
-
-        this.size = fs.fstatSync(this.fd).size;
-        return this.left() > 0;
+        return (this.left() > 0)
     }
 
     this.pick_closest_non_zero_file = function(temp_time_id) {
-        var end = this.to || time_inc(time());
-
-        while(temp_time_id < end) {
+        var end = this.to;
+        while(temp_time_id <= end) {
             if (this.open_time_id(temp_time_id))
                 return true;
             temp_time_id = time_inc(temp_time_id);
@@ -310,10 +291,8 @@ function Term(tag) {
 
     this.reopen_if_needed = function() {
         if (this.not_initialized) {
-            if (!this.pick_closest_non_zero_file(this.time_id)) {
-                this.time_id = time();
+            if (!this.pick_closest_non_zero_file(this.from))
                 return false;
-            }
             this.not_initialized = false;
         }
 
@@ -326,12 +305,6 @@ function Term(tag) {
     this.next = function () {
         if (this.doc_id.no_more())
             return this.doc_id;
-
-        if (this.to && this.time_id >= this.to) {
-            this.doc_id.reset();
-            return this.doc_id;
-        }
-
         if (this.reopen_if_needed()) {
             if (this.left() >= 6) {
                 this.buffer.fill(0);
@@ -347,11 +320,8 @@ function Term(tag) {
             }
         }
 
-        if (!this.is_pausable) {
-            this.doc_id.reset();
-            return this.doc_id;
-        }
-        return PAUSE;
+        this.doc_id.reset();
+        return this.doc_id;
     }
     this.to_string = function () {
         return "tag:" + this.tag + "@" + (this.from || 0) + ":" + (this.to || 0) + "#" + this.doc_id.to_string();
@@ -359,7 +329,6 @@ function Term(tag) {
 }
 
 function TermOffsetTimeId(list) {
-    this.is_pausable = false;
     this.list = list.sort(function(a,b) {
         var v = parseInt(a.time_id) - parseInt(b.time_id);
         if (v != 0)
@@ -369,7 +338,6 @@ function TermOffsetTimeId(list) {
 
     this.doc_id = new DocumentIdentifier();
     this.cursor = -1;
-    this.set_pausable = function() {}
     this.set_time_id_range = function(from,to) {
         // XXX: does it make sense to honor from/to here?
     }
@@ -415,20 +383,6 @@ function BoolOr() {
     this.queries = [];
     this.doc_id = new DocumentIdentifier();
     this.new_doc = new DocumentIdentifier();
-    this.is_pausable = false;
-    this.set_pausable = function() {
-        if (this.queries.length == 0) {
-            this.is_pausable = false;
-        } else {
-            var n_not_pausable = 0;
-            for (var i = 0; i < this.queries.length; i++) {
-                this.queries[i].set_pausable();
-                if (!this.queries[i].is_pausable)
-                    n_not_pausable++;
-            }
-            this.is_pausable = !(n_not_pausable == this.queries.length);
-        }
-    }
 
     this.add = function(query) {
         this.queries.push(query);
@@ -463,36 +417,16 @@ function BoolOr() {
         if (this.doc_id.no_more())
             return this.doc_id;
 
-        // XXX: this blocks until all of the queries are not pausing
         this.new_doc.reset();
-        var has_one_pause = false;
         for (var i = 0; i < this.queries.length; i++) {
             var cur_doc = this.queries[i].doc_id;
 
-            if (cur_doc.equals(this.doc_id)) {
-                var tmp = this.queries[i].next();
-
-                // in case we have one query that must pause, advance the other queries anyway
-                // so we group the pauses
-                if (tmp == PAUSE) {
-                    has_one_pause = true;
-                    continue;
-                } else {
-                    cur_doc = tmp;
-                }
-            }
+            if (cur_doc.equals(this.doc_id))
+                var cur_doc = this.queries[i].next();
             if (cur_doc.cmp(this.new_doc) <= 0)
                 this.new_doc.set(cur_doc);
         }
 
-        if (has_one_pause) {
-            if (!this.is_pausable) {
-                this.doc_id.reset();
-                return this.doc_id;
-            }
-
-            return PAUSE;
-        }
         this.doc_id.set(this.new_doc);
         return this.doc_id;
     }
@@ -505,10 +439,6 @@ function BoolOr() {
 function BoolAnd() {
     this.or = new BoolOr();
     this.doc_id = new DocumentIdentifier();
-
-    this.set_pausable = function() {
-        this.or.set_pausable();
-    }
 
     this.add = function(query) {
         this.or.add(query);
@@ -527,9 +457,6 @@ function BoolAnd() {
     }
 
     this.next_with_target = function (to_doc_id) {
-        if (to_doc_id == PAUSE)
-            return to_doc_id;
-
         if (to_doc_id.no_more()) {
             this.doc_id.reset();
             return this.doc_id;
@@ -614,14 +541,9 @@ var searcher = http.createServer(function (request, response) {
 
     var body = '';
     request.on('data', function (data) { body += data; });
-    var done = false;
-    var i = undefined;
+
     var cache = {};
     var cleanup = function() {
-        if (i) {
-            timers.clearInterval(i);
-            i = undefined;
-        }
         for (var k in cache) {
             cache[k].cleanup();
             delete cache[k];
@@ -630,15 +552,13 @@ var searcher = http.createServer(function (request, response) {
 
     var send = function(bytes) {
         if (qs.sub) {
+            var sub = qs.sub;
             if (!(sub instanceof Array))
                 sub = [sub];
             var decoded = messages.Data.decode(bytes);
-
             var payload_at = [];
             var seen = {};
             // keep order
-            var sub = qs.sub;
-
             for (var i = 0; i < sub.length; i++) {
                 if (sub[i] in decoded.header.tags_to_indexes) {
                     var indexes = decoded.header.tags_to_indexes[sub[i]].indexes;
@@ -685,25 +605,16 @@ var searcher = http.createServer(function (request, response) {
         try {
             obj = JSON.parse(body);
             var q = parse(obj);
-            q.set_pausable();
-            i = setInterval(function() {
-                try {
-                    var n;
-                    do {
-                        var n = q.next()
-                        if (n != PAUSE) {
-                            if (n.no_more()) {
-                                response.end();
-                                cleanup();
-                                break;
-                            }
-                            send(get_store_obj(n.time_id,cache).get(n.offset));
-                        }
-                    } while(n != PAUSE);
-                } catch (e) {
-                    err_handler(response,e,i);
+            var n;
+            while(true) {
+                var n = q.next()
+                if (n.no_more()) {
+                    response.end();
+                    cleanup();
+                    break;
                 }
-            },1000);
+                send(get_store_obj(n.time_id,cache).get(n.offset));
+            };
         } catch(e) {
             err_handler(response,e,undefined);
         };
@@ -719,94 +630,18 @@ var acceptor = http.createServer(function (request, response) {
     var url_parts = url.parse(request.url, true);
     var query = url_parts.query;
     var body = new Buffer(0);
-    var is_receiving_replica = parseInt(query.replica || 0);
-    var wait_for_n_replicas = parseInt(query.wait_for_n_replicas || 0);
-    var do_n_replicas = parseInt(query.do_n_replicas || 0);
-    var per_replica_timeout_ms = parseInt(query.per_replica_timeout_ms || 1000);
     request.on('data', function (data) { body = Buffer.concat([body,data]) });
     request.on('end', function () {
         try {
-            var decoded,t;
-
-            if (is_receiving_replica) {
-                decoded = messages.Data.decode(body);
-                t = decoded.header.time_id
-            } else {
-                decoded = JSON.parse(body)
-                t = time();
-            }
-
+            var decoded = JSON.parse(body)
+            var t = time();
             var s = get_store_obj(t, NAME_TO_STORE);
-            var encoded = s.append(decoded, is_receiving_replica);
+            var encoded = s.append(decoded);
             WCOUNTER++;
+
             var errors = [], connections = [];
-            var timeout_timer = undefined;
-            var ack = function() {
-                response.writeHead(200, {"Content-Type": "application/json"});
-                response.end(JSON.stringify({offset: s.position, fn: s.fn, errors: errors, encoded_length: encoded.length}));
-                if (timeout_timer)
-                    clearTimeout(timeout_timer);
-            }
-
-            if (query.ack_before_replication)
-                ack();
-
-            if (!is_receiving_replica && POOL.length > 0 && do_n_replicas > 0) {
-                var need = Math.min(wait_for_n_replicas, POOL.length, do_n_replicas);
-                var left = Math.min(POOL.length, do_n_replicas);
-                timeout_timer = setTimeout(function() {
-                    connections.forEach(function(c) {
-                        c.abort()
-                    });
-                }, per_replica_timeout_ms + 10);
-
-                for (var idx = 0; idx < do_n_replicas && idx < POOL.length; idx++) {
-                    // always send to the same items from the pool
-                    // must randomize the pool arguments per box in order to balance
-                    var rr = http.request({
-                        host: POOL[idx].host,
-                        port: POOL[idx].port,
-                        method: 'POST',
-                        path: '/?replica=' + (idx + 1) }, function (replica_response) {
-                            var data = '';
-                            replica_response.on('data', function(chunk) { data += chunk; });
-                            replica_response.on('end', function() {
-                                left--;
-                                try {
-                                    var rlen = JSON.parse(data).encoded_length;
-                                    if (rlen != encoded.length)
-                                        throw(new Error("remote encoded length("+rlen+") != local encoded length("+encoded.length+")"));
-                                    need--;
-                                } catch (e) {
-                                    errors.push(e.message)
-                                }
-
-                                if ((need == 0 || left == 0) && !query.ack_before_replication)
-                                    ack();
-                            });
-                        });
-                    connections.push(rr);
-                    rr.on('socket', function (socket) {
-                        socket.setTimeout(per_replica_timeout_ms);
-                        socket.on('timeout', function() {
-                            rr.abort();
-                        });
-                    });
-
-                    rr.on('error', function (err) {
-                        errors.push(err.message)
-                        if (--left == 0 && !query.ack_before_replication)
-                            ack();
-                    });
-
-                    rr.write(encoded, 'binary');
-                    rr.end();
-                }
-            } else {
-                if (!query.ack_before_replication)
-                    ack();
-            }
-
+            response.writeHead(200, {"Content-Type": "application/json"});
+            response.end(JSON.stringify({offset: s.position, fn: s.fn, errors: errors, encoded_length: encoded.length}));
         } catch (e) {
             err_handler(response, e, undefined, true);
         }
