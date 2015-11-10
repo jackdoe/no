@@ -643,7 +643,7 @@ if (SEARCHER_PORT > 0)
     searcher.listen(SEARCHER_PORT);
 
 if (WRITER_UDP_PORT > 0) {
-    udp.on('message', function (message, remote) { get_store_obj(time(), NAME_TO_STORE).append(message, ["any"], function() {}); });
+    udp.on('message', function (message, remote) { WCOUNTER++; get_store_obj(time(), NAME_TO_STORE).append(JSON.parse(message), function() {}); });
     udp.bind(WRITER_UDP_PORT);
 }
 
