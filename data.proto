@@ -11,7 +11,6 @@ message Header {
     required uint64 time_id = 1;
     required uint64 offset = 2;
     required uint64 node_id = 3;
-    map<string, ArrayOfIndexes> tags_to_indexes = 4;
 }
 
 message Data {

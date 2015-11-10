@@ -88,10 +88,7 @@ Store.prototype.append = function(data) {
     for(var i=0; i<data.length; i++) {
         var tags = data[i].tags;
         for (var j = 0; j < tags.length; j++) {
-            var tag = tags[j];
-            if (!(tag in tags_to_indexes))
-                tags_to_indexes[tag] = {indexes: []};
-            tags_to_indexes[tag].indexes.push(i);
+            tags_to_indexes[tags[j]] = i;
         }
     }
 
@@ -100,7 +97,6 @@ Store.prototype.append = function(data) {
             time_id: this.time_id,
             offset: this.position,
             node_id: NODE_ID,
-            tags_to_indexes: tags_to_indexes,
         },
         payload: data,
     });
@@ -554,25 +550,16 @@ var searcher = http.createServer(function (request, response) {
             var sub = qs.sub;
             if (!(sub instanceof Array))
                 sub = [sub];
+            var payload = [];
             var decoded = messages.Data.decode(bytes);
-            var payload_at = [];
-            var seen = {};
-            // keep order
+            var seen = {}
             for (var i = 0; i < sub.length; i++) {
-                if (sub[i] in decoded.header.tags_to_indexes) {
-                    var indexes = decoded.header.tags_to_indexes[sub[i]].indexes;
-                    for (var j = 0; j < indexes.length;  j++) {
-                        if (!(i in seen)) {
-                            payload_at.push(indexes[j]);
-                            seen[i] = true;
-                        }
+                for (var j = 0; j < decoded.payload.length; j++) {
+                    if (!seen[j] && decoded.payload[j].tags.indexOf(sub[i]) > -1) {
+                        payload.push(decoded.payload[j]);
+                        seen[j] = true;
                     }
                 }
-            }
-
-            var payload = [];
-            for (var i = 0; i < payload_at.length; i++) {
-                payload.push(decoded.payload[payload_at[i]]);
             }
 
             var output = {
