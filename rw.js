@@ -420,13 +420,12 @@ function BoolOr() {
         this.new_doc.reset();
         for (var i = 0; i < this.queries.length; i++) {
             var cur_doc = this.queries[i].doc_id;
+            if (cur_doc.equals(this.doc_id) || cur_doc.time_id == -1)
+                cur_doc = this.queries[i].next();
 
-            if (cur_doc.equals(this.doc_id))
-                var cur_doc = this.queries[i].next();
-            if (cur_doc.cmp(this.new_doc) <= 0)
+            if (cur_doc.cmp(this.new_doc) < 0)
                 this.new_doc.set(cur_doc);
         }
-
         this.doc_id.set(this.new_doc);
         return this.doc_id;
     }
@@ -628,7 +627,6 @@ var searcher = http.createServer(function (request, response) {
 
 var acceptor = http.createServer(function (request, response) {
     var url_parts = url.parse(request.url, true);
-    var query = url_parts.query;
     var body = new Buffer(0);
     request.on('data', function (data) { body = Buffer.concat([body,data]) });
     request.on('end', function () {
