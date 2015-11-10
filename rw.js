@@ -639,9 +639,8 @@ var acceptor = http.createServer(function (request, response) {
             var encoded = s.append(decoded);
             WCOUNTER++;
 
-            var errors = [], connections = [];
             response.writeHead(200, {"Content-Type": "application/json"});
-            response.end(JSON.stringify({offset: s.position, fn: s.fn, errors: errors, encoded_length: encoded.length}));
+            response.end(JSON.stringify({offset: s.position, fn: s.time_id}));
         } catch (e) {
             err_handler(response, e, undefined, true);
         }
