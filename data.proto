@@ -1,5 +1,5 @@
 message ArrayOfIndexes {
-    repeated uint32 indexes;
+    repeated uint32 indexes = 1;
 }
 
 message Payload {
