@@ -16,15 +16,17 @@ well.. lets see
 
 #### Reading
 ```
-$> curl -XGET -d '{"and":[{"or":[{"tag":"a"}]},{"or":[{"tag":"b"},{"tag":"a"}]}]}' http://localhost:8001/' # query AND(OR(a),OR(b,a))
-$> curl -XGET -d '{"tag":"a"}' http://localhost:8001/' # query a
-$> curl -XGET -d '{"tag":"a", "from": 144658121, "to": 144658324}' 'http://localhost:8001/'' # query a from time id 144658121 to time id 144658324
+$ curl -XGET -d '{"and":[{"or":[{"tag":"a"}]},{"or":[{"tag":"b"},{"tag":"a"}]}]}' http://localhost:8001/' # query AND(OR(a),OR(b,a))
+$ curl -XGET -d '{"tag":"any"}' http://localhost:8001/' # query a
 
 ```
 PS: Reading is buffered, so you'll have to push a bunch of messages to see them arrive
 
 #### Writing
 ```
-$> curl -XGET -d '{blablabla}' 'http://localhost:8000/?tags=a&tags=b' # send messages with tags a and b
-$> echo -n "hello" >/dev/udp/localhost/8003
+
+$ node json_to_protobuf.js '{"header":{"node_id": 0, "time_id": 0, "offset": 0, "tags":["a","b"]},"frames":[{"data": "AAAAAAAAAAA"},{"data": "BBBBBBBBBB","id":"b"}]}' > example.pb
+$ curl -silent -XGET --data-binary @example.pb 'http://localhost:8000/' # send messages with tags a and b
+$ cat example.pb >/dev/udp/localhost/8003
+
 ```

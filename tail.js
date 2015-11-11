@@ -10,7 +10,7 @@ var rr = http.request(
         host: process.argv[2],
         port: parseInt(process.argv[3]),
         method: 'POST',
-        path: '/?tlv=1',
+        path: '/?tlv=1&' + (process.argv[5] || ''),
     },function (res) {
         var data = new Buffer(0);
         var need = -1;

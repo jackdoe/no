@@ -1,7 +1,8 @@
 // curl -XGET -d '{"and":[{"or":[{"tag":"a"}]},{"or":[{"tag":"b"},{"tag":"a"}]}]}' http://localhost:8001/' # query AND(OR(a),OR(b,a))
 // curl -XGET -d '{"tag":"any"}' http://localhost:8001/' # query a
-// curl -XGET -d '[{"tags":["a","b"],"data":"asdasd"}]' 'http://localhost:8000/' # send messages with tags a and b
-// echo -n "hello" >/dev/udp/localhost/8003
+// node json_to_protobuf.js '{"header":{"node_id": 0, "time_id": 0, "offset": 0, "tags":["a","b"]},"frames":[{"data": "AAAAAAAAAAA"},{"data": "BBBBBBBBBB","id":"b"}]}' > example.pb
+// curl -silent -XGET --data-binary @example.pb 'http://localhost:8000/' # send messages with tags a and b
+// cat example.pb >/dev/udp/localhost/8003
 
 var protobuf = require('protocol-buffers')
 var http = require('http');
@@ -84,22 +85,11 @@ Store.prototype.append = function(data) {
     if (data.length > 0xFFFFFF || data.length == 0)
         this.log("data.length("+data.length+") > 0xFFFFFF",0);
 
-    var tags_to_indexes = {};
-    for(var i=0; i<data.length; i++) {
-        var tags = data[i].tags;
-        for (var j = 0; j < tags.length; j++) {
-            tags_to_indexes[tags[j]] = i;
-        }
-    }
+    data.header.time_id = this.time_id;
+    data.header.offset = this.position;
+    data.header.node_id = NODE_ID;
 
-    var encoded = messages.Data.encode({
-        header: {
-            time_id: this.time_id,
-            offset: this.position,
-            node_id: NODE_ID,
-        },
-        payload: data,
-    });
+    var encoded = messages.Data.encode(data);
 
     // XXX: make the protobuf decoder understand streams and offsets, instead of writing the length here
     var blen = new Buffer(4);
@@ -119,9 +109,7 @@ Store.prototype.append = function(data) {
     buf.writeUInt32BE(this.position >> 16, 2);
 
     this.position += encoded.length + blen.length;
-
-    var tags = Object.keys(tags_to_indexes);
-    // XXX: Encode the payload index in each tag to make sub-addressing easy.
+    var tags = data.header.tags;
     for (var i = 0; i < tags.length; i++) {
         var tag = tags[i];
         if (tag) {
@@ -550,13 +538,13 @@ var searcher = http.createServer(function (request, response) {
             var sub = qs.sub;
             if (!(sub instanceof Array))
                 sub = [sub];
-            var payload = [];
+            var frames = [];
             var decoded = messages.Data.decode(bytes);
             var seen = {}
             for (var i = 0; i < sub.length; i++) {
-                for (var j = 0; j < decoded.payload.length; j++) {
-                    if (!seen[j] && decoded.payload[j].tags.indexOf(sub[i]) > -1) {
-                        payload.push(decoded.payload[j]);
+                for (var j = 0; j < decoded.frames.length; j++) {
+                    if (!seen[j] && decoded.frames[j].id == sub[i]) {
+                        frames.push(decoded.frames[j]);
                         seen[j] = true;
                     }
                 }
@@ -564,16 +552,9 @@ var searcher = http.createServer(function (request, response) {
 
             var output = {
                 header: decoded.header,
-                payload: payload
+                frames: frames
             };
-            if (qs.json) {
-                bytes = JSON.stringify(output)
-            } else {
-                bytes = messages.Data.encode(output);
-            }
-        } else {
-            if (qs.json)
-                bytes = JSON.stringify(messages.Data.decode(bytes))
+            bytes = messages.Data.encode(output);
         }
 
         RCOUNTER++;
@@ -618,7 +599,7 @@ var acceptor = http.createServer(function (request, response) {
     request.on('data', function (data) { body = Buffer.concat([body,data]) });
     request.on('end', function () {
         try {
-            var decoded = JSON.parse(body)
+            var decoded = messages.Data.decode(body)
             var t = time();
             var s = get_store_obj(t, NAME_TO_STORE);
             var encoded = s.append(decoded);
@@ -643,7 +624,7 @@ if (SEARCHER_PORT > 0)
     searcher.listen(SEARCHER_PORT);
 
 if (WRITER_UDP_PORT > 0) {
-    udp.on('message', function (message, remote) { WCOUNTER++; get_store_obj(time(), NAME_TO_STORE).append(JSON.parse(message), function() {}); });
+    udp.on('message', function (message, remote) { WCOUNTER++; get_store_obj(time(), NAME_TO_STORE).append(messages.Data.decode(message), function() {}); });
     udp.bind(WRITER_UDP_PORT);
 }
 
