@@ -14,7 +14,7 @@ import (
 )
 
 const numProccessors = 1
-const filePath = "/Users/ikruglov/tmp/listener/"
+const filePath = "/Users/ikruglov/tmp/indexer/"
 const hostPort = "127.0.0.1:8003"
 const max_tag_length = 40
 const max_tags_in_message = 255
@@ -90,8 +90,8 @@ func main() {
 		for {
 			ctick := &compaction_tick{<-tick, make(chan compaction_job)}
 			go compactor(ctick.t, ctick.ch)
-			for i := 0; i < numProccessors; i++ {
-				ticks[i] <- *ctick
+			for _, tick := range ticks {
+				tick <- *ctick
 			}
 		}
 	}(time.Tick(1 * time.Second))
@@ -107,7 +107,7 @@ func compactor(t time.Time, c chan compaction_job) {
 	log.Printf("new compactor for epoch %d", epoch)
 
 	var jobs [numProccessors]compaction_job
-	for i := 0; i < numProccessors; i++ {
+	for _ = range jobs {
 		cjob := <-c
 		total += cjob.total
 		jobs[cjob.id] = cjob
@@ -218,6 +218,7 @@ func compactor(t time.Time, c chan compaction_job) {
 
 func processor(id int, conn *net.UDPConn, tick <-chan compaction_tick, quit, done chan struct{}) {
 	buf := make([]byte, 65536, 65536)
+	buf4 := make([]byte, 4, 4)
 	index := make(map[string]*deque)
 	data := &Data{}
 	total := 0
@@ -288,6 +289,11 @@ loop:
 				continue
 			}
 
+			if _, err := file.Write(intToByteArray(uint32(length), buf4)); err != nil {
+				log.Println("Failed to write to file", err)
+				continue
+			}
+
 			if _, err := file.Write(buf); err != nil {
 				log.Println("Failed to write to file", err)
 				continue
@@ -321,4 +327,12 @@ loop:
 	}
 
 	done <- struct{}{}
+}
+
+func intToByteArray(v uint32, out []byte) []byte {
+	out[3] = byte(v >> 24)
+	out[2] = byte(v >> 16)
+	out[1] = byte(v >> 8)
+	out[0] = byte(v)
+	return out
 }
