@@ -217,8 +217,7 @@ func compactor(t time.Time, c chan compaction_job) {
 }
 
 func processor(id int, conn *net.UDPConn, tick <-chan compaction_tick, quit, done chan struct{}) {
-	buf := make([]byte, 65536, 65536)
-	buf4 := make([]byte, 4, 4)
+	buf := make([]byte, 65536 + 4, 65536 + 4)
 	index := make(map[string]*deque)
 	data := &Data{}
 	total := 0
@@ -270,7 +269,7 @@ loop:
 
 		default:
 			conn.SetReadDeadline(time.Now().Add(time.Millisecond))
-			length, err := conn.Read(buf)
+			length, err := conn.Read(buf[4:])
 			if err != nil {
 				if err.(net.Error).Timeout() == false {
 					log.Println("UDP read error", err)
@@ -278,7 +277,7 @@ loop:
 				continue
 			}
 
-			if err := proto.Unmarshal(buf[:length], data); err != nil {
+			if err := proto.Unmarshal(buf[4:length+4], data); err != nil {
 				log.Println("Failed to decode", err)
 				continue
 			}
@@ -289,11 +288,7 @@ loop:
 				continue
 			}
 
-			if _, err := file.Write(intToByteArray(uint32(length), buf4)); err != nil {
-				log.Println("Failed to write to file", err)
-				continue
-			}
-
+			intToByteArray(uint32(length), buf[0:4])
 			if _, err := file.Write(buf); err != nil {
 				log.Println("Failed to write to file", err)
 				continue
