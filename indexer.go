@@ -158,14 +158,6 @@ func compactor(t time.Time, c chan compaction_job) {
 		return out
 	}
 
-	intToByteArray := func(v uint32, out []byte) []byte {
-		out[3] = byte(v >> 24)
-		out[2] = byte(v >> 16)
-		out[1] = byte(v >> 8)
-		out[0] = byte(v)
-		return out
-	}
-
 	// type record struct {
 	//	tag		   uint32 // high byte - size, low three - offset
 	//	offset	   uint32
