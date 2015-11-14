@@ -289,7 +289,7 @@ loop:
 			}
 
 			intToByteArray(uint32(length), buf[0:4])
-			if _, err := file.Write(buf); err != nil {
+			if _, err := file.Write(buf[:length+4]); err != nil {
 				log.Println("Failed to write to file", err)
 				continue
 			}
