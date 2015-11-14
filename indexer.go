@@ -242,7 +242,7 @@ func processor(id int, conn *net.UDPConn, tick <-chan compaction_tick, quit, don
 			return file, 0
 		}
 
-		offset, _ := file.Seek(0, 0)
+		offset, _ := file.Seek(0, 1)
 		return file, offset
 	}
 
