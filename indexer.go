@@ -222,7 +222,6 @@ func processor(id int, conn *net.UDPConn, tick <-chan compaction_tick, quit, don
 	data := &Data{}
 	total := 0
 
-	t := (<-tick).t
 	log.Printf("new processor %d", id)
 
 	var file *os.File
@@ -246,20 +245,29 @@ func processor(id int, conn *net.UDPConn, tick <-chan compaction_tick, quit, don
 		return file, offset
 	}
 
+	defer func() {
+		if file != nil {
+			file.Close()
+		}
+	}()
+
+	ctick := <-tick
+
 loop:
 	for {
 		select {
-		case ctick := <-tick:
+		case ct := <-tick:
 			log.Printf("[%d] send job to compactor\n", id)
 			ctick.ch <- compaction_job{id, total, index}
 
 			total = 0
-			t = ctick.t
 			index = make(map[string]*deque)
 			if file != nil {
 				file.Close()
 				file = nil
 			}
+
+			ctick = ct
 
 			select {
 			case <-quit:
@@ -282,7 +290,7 @@ loop:
 				continue
 			}
 
-			file, offset := getFile(t)
+			file, offset := getFile(ctick.t)
 			if file == nil {
 				log.Println("Failed to get file")
 				continue
