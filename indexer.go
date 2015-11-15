@@ -20,6 +20,15 @@ const max_offset = 0x7FFFFFFF
 const max_tag_length = 40
 const max_tags_in_message = 255
 const deque_vals_in_item = 1024
+const index_file_header = "=idxi\x01"
+const data_file_header = "=idxd\x01"
+const indexed_tag_size = 8
+const uint32_size = 4
+
+// type indexedTag struct {
+// tag     uint32
+// offsets uint32
+// }
 
 type deque_item struct {
 	id   int // hack, remove later
@@ -135,7 +144,7 @@ func compactor(t time.Time, c chan compaction_job) {
 		for tag, tag_deque := range job.index {
 			if deque, ok := tags[tag]; !ok {
 				tags[tag] = tag_deque
-				tagStringsSize += len(tag)
+				tagStringsSize += len(tag) + 1 // + 1 for size byte
 			} else {
 				deque.AppendAll(tag_deque)
 			}
@@ -151,43 +160,34 @@ func compactor(t time.Time, c chan compaction_job) {
 
 	sort.Strings(tagsArray)
 
-	encodeSizeAndOffset := func(length int, offset uint32, out []byte) []byte {
-		out[3] = byte(length & 0xFF)
-		out[2] = byte(offset >> 16)
-		out[1] = byte(offset >> 8)
-		out[0] = byte(offset)
-		return out
-	}
-
-	// type record struct {
-	//	tag		   uint32 // high byte - size, low three - offset
-	//	offset	   uint32
-	// }
-
 	buf4 := make([]byte, 4, 4)
-	tagsLength := uint32(len(tagsArray))
-	tagOffset := tagsLength*8 + 4 + 5
-	dequeOffset := tagOffset + uint32(tagStringsSize)
+	tagsLength := len(tagsArray)
+	/*			 header				      tagsLength	array of indexedTags*/
+	tagOffset := len(index_file_header) + uint32_size + (tagsLength * indexed_tag_size)
+	dequeOffset := tagOffset + tagStringsSize
 
-	file.WriteString("=idxi1")
-	file.Write(intToByteArray(tagsLength, buf4))
+	file.WriteString(index_file_header)
+	file.Write(intToByteArray(uint32(tagsLength), buf4))
 
 	for _, t := range tagsArray {
-		file.Write(encodeSizeAndOffset(len(t), tagOffset, buf4))
-		file.Write(intToByteArray(dequeOffset, buf4))
-		tagOffset += uint32(len(t))
-		dequeOffset += uint32(4 + tags[t].size*4)
+		file.Write(intToByteArray(uint32(tagOffset), buf4))
+		file.Write(intToByteArray(uint32(dequeOffset), buf4))
+		tagOffset += len(t) + 1 // + 1 for size
+		/*			   number of offsets  offsets */
+		dequeOffset += uint32_size + (tags[t].size * uint32_size)
 	}
 
 	for _, t := range tagsArray {
-		file.Write([]byte(t))
+		buf4[0] = byte(len(t))
+		file.Write(buf4[:1])
+		file.WriteString(t)
 	}
 
 	for _, t := range tagsArray {
 		id := -1
 		d := tags[t]
 		deque_item := d.head
-		file.Write(intToByteArray(uint32(d.size+len(jobs)), buf4))
+		file.Write(intToByteArray(uint32(d.size), buf4))
 
 		for deque_item != nil {
 			if deque_item.id != id {
@@ -196,7 +196,7 @@ func compactor(t time.Time, c chan compaction_job) {
 			}
 
 			for i := uint32(0); i < deque_item.idx; i++ {
-				file.Write(intToByteArray(deque_item.vals[i], buf4))
+				file.Write(intToByteArray(deque_item.vals[i], buf4)) // TODO use unsafe
 			}
 
 			deque_item = deque_item.next
@@ -205,7 +205,7 @@ func compactor(t time.Time, c chan compaction_job) {
 }
 
 func processor(id int, conn *net.UDPConn, tick <-chan compaction_tick, quit, done chan struct{}) {
-	buf := make([]byte, 65536 + 4, 65536 + 4)
+	buf := make([]byte, 65536+4, 65536+4)
 	index := make(map[string]*deque)
 	data := &Data{}
 	total := 0
@@ -213,6 +213,7 @@ func processor(id int, conn *net.UDPConn, tick <-chan compaction_tick, quit, don
 	log.Printf("new processor %d", id)
 
 	var file *os.File
+	defer file.Close()
 	getFile := func(t time.Time) (*os.File, int64) {
 		if file == nil {
 			epoch := t.Unix()
@@ -226,7 +227,7 @@ func processor(id int, conn *net.UDPConn, tick <-chan compaction_tick, quit, don
 				return nil, 0
 			}
 
-			if _, err = file.WriteString("=idxd1"); err != nil {
+			if _, err = file.WriteString(data_file_header); err != nil {
 				log.Println("Failed to write to file", err)
 				return nil, 0
 			}
@@ -235,12 +236,6 @@ func processor(id int, conn *net.UDPConn, tick <-chan compaction_tick, quit, don
 		offset, _ := file.Seek(0, 1)
 		return file, offset
 	}
-
-	defer func() {
-		if file != nil {
-			file.Close()
-		}
-	}()
 
 	ctick := <-tick
 
