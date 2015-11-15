@@ -45,7 +45,7 @@ func (idx *index) findTag(tag string) (offsets []byte, ok bool) {
 	t := []byte(tag)
 	comparator := func(i int) bool { return bytes.Compare(idx.getTag(i), t) >= 0 }
 	pos := sort.Search(len(idx.tags), comparator)
-	if pos < len(idx.tags) {
+	if pos < len(idx.tags) && bytes.Equal(idx.getTag(pos), t) {
 		offsets := idx.tags[pos].offsets
 		return idx.data[offsets:], true
 	}
