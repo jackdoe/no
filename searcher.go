@@ -73,8 +73,8 @@ func (idx *index) getOffsetsForTag(tag string) func() (id int, offset uint32, ok
 
 	offsets := *(*[]uint32)(unsafe.Pointer(&sliceHeader))
 	count := int(offsets[0])
-	if count <= 0 || count > len(offsets) { // count can't be 0
-		fmt.Println("count <= 0 || count > len(offsets)")
+	if count <= 0 || count >= len(offsets) { // count can't be 0
+		fmt.Println("count <= 0 || count >= len(offsets)")
 		return nil
 	}
 
@@ -87,7 +87,7 @@ func (idx *index) getOffsetsForTag(tag string) func() (id int, offset uint32, ok
 	pos := 0
 	return func() (int, uint32, bool) {
 		for {
-			if pos > count {
+			if pos >= count || pos >= len(offsets) {
 				return 0, 0, false
 			}
 
@@ -95,6 +95,7 @@ func (idx *index) getOffsetsForTag(tag string) func() (id int, offset uint32, ok
 			offset := offsets[pos]
 			if offset&0x80000000 == 0x80000000 {
 				id = offset & 0x7FFFFFFF
+				count++
 			} else {
 				return int(id), offset, true
 			}
