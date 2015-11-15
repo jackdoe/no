@@ -16,6 +16,7 @@ import (
 const numProccessors = 1
 const filePath = "/Users/ikruglov/tmp/indexer/"
 const hostPort = "127.0.0.1:8003"
+const max_offset = 0x7FFFFFFF
 const max_tag_length = 40
 const max_tags_in_message = 255
 const deque_vals_in_item = 1024
@@ -195,13 +196,7 @@ func compactor(t time.Time, c chan compaction_job) {
 			}
 
 			for i := uint32(0); i < deque_item.idx; i++ {
-				offset := deque_item.vals[i]
-				if offset > 0x7FFFFFFF {
-					log.Println("too long offset")
-					break
-				}
-
-				file.Write(intToByteArray(offset, buf4))
+				file.Write(intToByteArray(deque_item.vals[i], buf4))
 			}
 
 			deque_item = deque_item.next
@@ -289,6 +284,12 @@ loop:
 			file, offset := getFile(ctick.t)
 			if file == nil {
 				log.Println("Failed to get file")
+				continue
+			}
+
+			if offset > max_offset {
+				// TODO possible open new file
+				log.Println("Too big offset")
 				continue
 			}
 
