@@ -165,9 +165,10 @@ func compactor(t time.Time, c chan compaction_job) {
 
 	buf4 := make([]byte, 4, 4)
 	tagsLength := uint32(len(tagsArray))
-	tagOffset := tagsLength*8 + 4
+	tagOffset := tagsLength*8 + 4 + 5
 	dequeOffset := tagOffset + uint32(tagStringsSize)
 
+	file.WriteString("=idxi1")
 	file.Write(intToByteArray(tagsLength, buf4))
 
 	for _, t := range tagsArray {
@@ -230,7 +231,10 @@ func processor(id int, conn *net.UDPConn, tick <-chan compaction_tick, quit, don
 				return nil, 0
 			}
 
-			return file, 0
+			if _, err = file.WriteString("=idxd1"); err != nil {
+				log.Println("Failed to write to file", err)
+				return nil, 0
+			}
 		}
 
 		offset, _ := file.Seek(0, 1)
