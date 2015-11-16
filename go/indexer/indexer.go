@@ -265,7 +265,7 @@ loop:
 			conn.SetReadDeadline(time.Now().Add(time.Millisecond))
 			length, err := conn.Read(buf[4:])
 			if err != nil {
-				if err.(net.Error).Timeout() == false {
+				if nerr, ok := err.(net.Error); ok && nerr.Timeout() == false {
 					log.Println("UDP read error", err)
 				}
 				continue
