@@ -13,7 +13,7 @@ It has these top-level messages:
 	Header
 	Data
 */
-package main
+package datapb
 
 import proto "github.com/golang/protobuf/proto"
 import fmt "fmt"
