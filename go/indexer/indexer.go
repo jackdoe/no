@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/golang/protobuf/proto"
 	pb "github.com/jackdoe/no/go/datapb"
 )
 
@@ -208,7 +207,7 @@ func compactor(t time.Time, c chan compaction_job) {
 func processor(id int, conn *net.UDPConn, tick <-chan compaction_tick, quit, done chan struct{}) {
 	buf := make([]byte, 65536+4, 65536+4)
 	index := make(map[string]*deque)
-	data := &pb.Data{}
+	data := pb.Data{}
 	total := 0
 
 	log.Printf("new processor %d", id)
@@ -272,7 +271,7 @@ loop:
 				continue
 			}
 
-			if err := proto.Unmarshal(buf[4:length+4], data); err != nil {
+			if err := data.Unmarshal(buf[4 : length+4]); err != nil {
 				log.Println("Failed to decode", err)
 				continue
 			}
