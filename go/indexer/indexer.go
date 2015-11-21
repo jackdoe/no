@@ -9,71 +9,74 @@ import (
 	"sort"
 	"syscall"
 	"time"
+	"unsafe"
 
 	pb "github.com/jackdoe/no/go/datapb"
 )
 
-const numProccessors = 1
+const numProccessors = 2
 const filePath = "/Users/ikruglov/tmp/indexer/"
 const hostPort = "127.0.0.1:8003"
-const max_offset = 0x7FFFFFFF
-const max_tag_length = 40
-const max_tags_in_message = 255
-const deque_vals_in_item = 1024
-const index_file_header = "=idxi\x01"
-const data_file_header = "=idxd\x01"
-const indexed_tag_size = 8
-const uint32_size = 4
+const maxOffset = 0x7FFFFFFF
+const maxTagLength = 40
+const maxTagsInMessage = 255
+const dequeItemSize = 1024
+const dequeItemSizeBytes = dequeItemSize * uint32Size
+const indexFileHeader = "=idxi\x01"
+const dataFileHeader = "=idxd\x01"
+const indexedTagSize = 8
+const uint32Size = 4
 
-// type indexedTag struct {
-// tag     uint32
-// offsets uint32
-// }
-
-type deque_item struct {
-	id   int // hack, remove later
-	idx  uint32
-	vals [deque_vals_in_item]uint32
-	next *deque_item
+type dequeItem struct {
+	idx, partition int
+	vals           [dequeItemSize]uint32
+	next           *dequeItem
 }
 
 type deque struct {
-	head, current *deque_item
-	size, id      int
+	head, current    *dequeItem
+	size, partitions int
 }
 
-func newDeque(id int) *deque {
-	head := &deque_item{idx: 0, next: nil}
-	return &deque{head, head, 0, id}
+func newDeque(partition int) *deque {
+	head := newDequeItem(partition)
+	return &deque{head, head, 0, 1}
+}
+
+func newDequeItem(partition int) *dequeItem {
+	return &dequeItem{partition: partition}
 }
 
 func (d *deque) Append(v uint32) {
-	if d.current.idx < deque_vals_in_item {
-		d.current.vals[d.current.idx] = v
-		d.current.idx++
-	} else {
-		next := &deque_item{id: d.id, idx: 1, next: nil}
-		next.vals[0] = v
+	if d.current.idx >= len(d.current.vals) {
+		next := newDequeItem(d.current.partition)
 		d.current.next = next
 		d.current = next
 	}
 
+	d.current.vals[d.current.idx] = v
+	d.current.idx++
 	d.size++
 }
 
 func (d *deque) AppendAll(da *deque) {
-	d.current.next = da.head
+	if da.current.partition != d.current.partition {
+		d.partitions++
+	}
+
 	d.size += da.size
+	d.current.next = da.head
+	d.current = da.current
 }
 
-type compaction_job struct {
+type compactionJob struct {
 	id, total int
 	index     map[string]*deque
 }
 
-type compaction_tick struct {
+type compactionTick struct {
 	t  time.Time
-	ch chan compaction_job
+	ch chan compactionJob
 }
 
 func main() {
@@ -89,16 +92,16 @@ func main() {
 
 	quit := make(chan struct{})
 	done := make(chan struct{})
-	ticks := make([]chan compaction_tick, numProccessors)
+	ticks := make([]chan compactionTick, numProccessors)
 
 	for i := 0; i < numProccessors; i++ {
-		ticks[i] = make(chan compaction_tick)
+		ticks[i] = make(chan compactionTick)
 		go processor(i, conn, ticks[i], quit, done)
 	}
 
 	go func(tick <-chan time.Time) {
 		for {
-			ctick := &compaction_tick{<-tick, make(chan compaction_job)}
+			ctick := &compactionTick{<-tick, make(chan compactionJob)}
 			go compactor(ctick.t, ctick.ch)
 			for _, tick := range ticks {
 				tick <- *ctick
@@ -111,12 +114,12 @@ func main() {
 	<-c
 }
 
-func compactor(t time.Time, c chan compaction_job) {
+func compactor(t time.Time, c chan compactionJob) {
 	total := 0
 	epoch := t.Unix()
 	log.Printf("new compactor for epoch %d", epoch)
 
-	var jobs [numProccessors]compaction_job
+	var jobs [numProccessors]compactionJob
 	for _ = range jobs {
 		cjob := <-c
 		total += cjob.total
@@ -141,12 +144,12 @@ func compactor(t time.Time, c chan compaction_job) {
 	tagStringsSize := 0
 	tags := make(map[string]*deque)
 	for _, job := range jobs {
-		for tag, tag_deque := range job.index {
+		for tag, td := range job.index {
 			if deque, ok := tags[tag]; !ok {
-				tags[tag] = tag_deque
+				tags[tag] = td
 				tagStringsSize += len(tag) + 1 // + 1 for size byte
 			} else {
-				deque.AppendAll(tag_deque)
+				deque.AppendAll(td)
 			}
 		}
 	}
@@ -163,18 +166,20 @@ func compactor(t time.Time, c chan compaction_job) {
 	buf4 := make([]byte, 4, 4)
 	tagsLength := len(tagsArray)
 	/*			 header				      tagsLength	array of indexedTags*/
-	tagOffset := len(index_file_header) + uint32_size + (tagsLength * indexed_tag_size)
+	tagOffset := len(indexFileHeader) + uint32Size + (tagsLength * indexedTagSize)
 	dequeOffset := tagOffset + tagStringsSize
 
-	file.WriteString(index_file_header)
+	file.WriteString(indexFileHeader)
 	file.Write(intToByteArray(uint32(tagsLength), buf4))
 
 	for _, t := range tagsArray {
 		file.Write(intToByteArray(uint32(tagOffset), buf4))
 		file.Write(intToByteArray(uint32(dequeOffset), buf4))
+		d := tags[t]
+
+		/*		       size          partition + its size		    offsets */
+		dequeOffset += uint32Size + (2 * d.partitions * uint32Size) + (d.size * uint32Size)
 		tagOffset += len(t) + 1 // + 1 for size
-		/*			   number of offsets  offsets */
-		dequeOffset += uint32_size + (tags[t].size * uint32_size)
 	}
 
 	for _, t := range tagsArray {
@@ -183,28 +188,30 @@ func compactor(t time.Time, c chan compaction_job) {
 		file.WriteString(t)
 	}
 
+	partition := -1
+	calcPartitionSize := func(di *dequeItem) (res int) {
+		for p := di.partition; di != nil && p == di.partition; di, res = di.next, res+di.idx {
+		}
+		return res
+	}
+
 	for _, t := range tagsArray {
-		id := -1
 		d := tags[t]
-		deque_item := d.head
-		file.Write(intToByteArray(uint32(d.size), buf4))
-
-		for deque_item != nil {
-			if deque_item.id != id {
-				id = deque_item.id
-				file.Write(intToByteArray(uint32(0x80000000|id), buf4))
+		file.Write(intToByteArray(uint32(d.size+2*d.partitions), buf4))
+		for di := d.head; di != nil; di = di.next {
+			if di.partition != partition {
+				partition = di.partition
+				file.Write(intToByteArray(uint32(partition), buf4))
+				file.Write(intToByteArray(uint32(calcPartitionSize(di)), buf4))
 			}
 
-			for i := uint32(0); i < deque_item.idx; i++ {
-				file.Write(intToByteArray(deque_item.vals[i], buf4)) // TODO use unsafe
-			}
-
-			deque_item = deque_item.next
+			vals := *(*[dequeItemSizeBytes]byte)(unsafe.Pointer(&di.vals[0]))
+			file.Write(vals[:di.idx*uint32Size])
 		}
 	}
 }
 
-func processor(id int, conn *net.UDPConn, tick <-chan compaction_tick, quit, done chan struct{}) {
+func processor(id int, conn *net.UDPConn, tick <-chan compactionTick, quit, done chan struct{}) {
 	buf := make([]byte, 65536+4, 65536+4)
 	index := make(map[string]*deque)
 	data := pb.Data{}
@@ -227,7 +234,7 @@ func processor(id int, conn *net.UDPConn, tick <-chan compaction_tick, quit, don
 				return nil, 0
 			}
 
-			if _, err = file.WriteString(data_file_header); err != nil {
+			if _, err = file.WriteString(dataFileHeader); err != nil {
 				log.Println("Failed to write to file", err)
 				return nil, 0
 			}
@@ -244,14 +251,12 @@ loop:
 		select {
 		case ct := <-tick:
 			log.Printf("[%d] send job to compactor\n", id)
-			ctick.ch <- compaction_job{id, total, index}
+			ctick.ch <- compactionJob{id, total, index}
 
-			total = 0
 			index = make(map[string]*deque)
-			if file != nil {
-				file.Close()
-				file = nil
-			}
+			file.Close()
+			file = nil
+			total = 0
 
 			ctick = ct
 
@@ -271,6 +276,7 @@ loop:
 				continue
 			}
 
+			data.Reset()
 			if err := data.Unmarshal(buf[4 : length+4]); err != nil {
 				log.Println("Failed to decode", err)
 				continue
@@ -282,7 +288,7 @@ loop:
 				continue
 			}
 
-			if offset > max_offset {
+			if offset > maxOffset {
 				// TODO possible open new file
 				log.Println("Too big offset")
 				continue
@@ -297,13 +303,13 @@ loop:
 			// file.Sync()
 
 			tags := data.GetHeader().GetTags()
-			if len(tags) > max_tags_in_message {
-				log.Println("Too many tags in message")
+			if len(tags) > maxTagsInMessage {
+				log.Println("Too many tags in message ", len(tags))
 				continue
 			}
 
 			for _, tag := range tags {
-				if len(tag) > max_tag_length {
+				if len(tag) > maxTagLength {
 					log.Println("Too long tag")
 					continue
 				}
