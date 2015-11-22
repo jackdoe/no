@@ -1,294 +1,23 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"reflect"
-	"runtime"
-	"sort"
-	"syscall"
-	"unsafe"
+	"time"
 
 	pb "github.com/jackdoe/no/go/datapb"
 )
 
 const filePath = "/Users/ikruglov/tmp/indexer/"
 const hostPort = "127.0.0.1:8005"
-const indexHeader = "=idxi"
-const indexHeaderSize = len(indexHeader)
-const uint32Size = 4
 
-var maxAllowedMappedSize = int64(4 * 1024 * 1024 * 1024) // 4GB
-
-type indexedTag struct {
-	tag     uint32
-	offsets uint32
-}
-
-type index struct {
-	tags    []indexedTag
-	data    []byte
-	file    *os.File
-	version byte
-}
-
-type indexPartitions map[uint32][]uint32
-
-func (ip *indexPartitions) getSize() (res int) {
-	for _, p := range *ip {
-		res += len(p)
-	}
-	return res
-}
-
-func (idx *index) getTag(i int) []byte {
-	off := idx.tags[i].tag
-	strlen := uint32(idx.data[off])
-	return idx.data[off+1 : off+1+strlen]
-}
-
-func (idx *index) findTag(tag string) (offsets []byte, ok bool) {
-	t := []byte(tag)
-	comparator := func(i int) bool { return bytes.Compare(idx.getTag(i), t) >= 0 }
-	pos := sort.Search(len(idx.tags), comparator)
-	if pos < len(idx.tags) && bytes.Equal(idx.getTag(pos), t) {
-		offsets := idx.tags[pos].offsets
-		return idx.data[offsets:], true
-	}
-
-	return nil, false
-}
-
-func (idx *index) getTagPartitions(tag string) (indexPartitions, bool) {
-	data, ok := idx.findTag(tag)
-	if !ok || len(data) < 4 {
-		return nil, false
-	}
-
-	count := byteArrayToInt(data[:4])
-	if count <= 0 || count*uint32Size >= len(data) { //count can't be 0
-		log.Println("count <= 0 || count*uint32Size >= len(data)", count)
-		return nil, false
-	}
-
-	sliceHeader := reflect.SliceHeader{
-		Data: uintptr(unsafe.Pointer(&data[4])),
-		Len:  count,
-		Cap:  count,
-	}
-
-	pdata := *(*[]uint32)(unsafe.Pointer(&sliceHeader))
-	result := make(indexPartitions)
-	pos := 0
-
-	for pos+2 < len(pdata) {
-		partition := pdata[pos]
-		size := int(pdata[pos+1])
-		if pos+size+2 > len(pdata) {
-			log.Println("pos+size+2 > len(pdata)", pos, size, len(pdata), partition)
-			return nil, false
-		}
-		result[partition] = pdata[pos+2 : pos+2+size]
-		pos += 2 + size
-	}
-
-	return result, true
-}
-
-func getIndex(fileName string) *index {
-	file, err := os.Open(fileName)
-	if err != nil {
-		log.Println("failed to open file "+fileName, err)
-		return nil
-	}
-
-	defer file.Close()
-	fd := int(file.Fd())
-	stat, err := file.Stat()
-	if err != nil {
-		log.Println(err)
-		return nil
-	}
-
-	pageAlignedSize := (stat.Size() + 4095) &^ 4095
-	if maxAllowedMappedSize-pageAlignedSize < 0 {
-		log.Println("mmaped to much")
-		return nil
-	}
-
-	data, err := syscall.Mmap(fd, 0, int(pageAlignedSize), syscall.PROT_READ, syscall.MAP_PRIVATE)
-	if err != nil {
-		log.Println("Failed to mmap file", err)
-		return nil
-	}
-
-	defer func() { syscall.Munmap(data) }()
-
-	err = syscall.Mlock(data)
-	if err != nil {
-		log.Println("Failed to mlock file", err)
-		return nil
-	}
-
-	defer func() { syscall.Munlock(data) }()
-
-	pos := 0
-	if bytes.Compare([]byte(indexHeader), data[:indexHeaderSize]) != 0 {
-		log.Println("index file has incorrect format")
-		return nil
-	}
-
-	pos += indexHeaderSize
-	version := data[pos]
-	if version != 1 {
-		log.Println("unsupported version ", version)
-		return nil
-	}
-
-	pos++
-
-	var itag indexedTag
-	tagsCount := byteArrayToInt(data[pos : pos+4])
-	tagsArraySize := tagsCount * int(unsafe.Sizeof(itag))
-	if int64(tagsArraySize) > stat.Size() {
-		log.Println("tagsCount has invalid value")
-		return nil
-	}
-
-	pos += 4
-	tagsArray := data[pos : pos+tagsArraySize]
-	sliceHeader := reflect.SliceHeader{
-		Data: uintptr(unsafe.Pointer(&tagsArray[0])),
-		Len:  tagsCount,
-		Cap:  tagsCount,
-	}
-
-	idx := &index{
-		tags:    *(*[]indexedTag)(unsafe.Pointer(&sliceHeader)),
-		data:    data,
-		file:    file,
-		version: version,
-	}
-
-	runtime.SetFinalizer(idx, func(idx *index) {
-		maxAllowedMappedSize += pageAlignedSize
-		syscall.Munlock(idx.data)
-		syscall.Munmap(idx.data)
-		idx.file.Close()
-	})
-
-	file = nil
-	data = nil
-	maxAllowedMappedSize -= pageAlignedSize
-	return idx
-}
-
-func getIndexForEpoch(epoch int) *index {
-	return getIndex(fmt.Sprintf("%s%d-index", filePath, epoch))
-}
-
-func mergeAnd(a, b indexPartitions) indexPartitions {
-	result := make(indexPartitions)
-	if len(a) == 0 || len(b) == 0 {
-		return result
-	}
-
-	var ok bool
-	var p uint32
-	var valsA, valsB []uint32
-	for p, valsA = range a {
-		if valsB, ok = b[p]; !ok {
-			continue
-		}
-
-		var r []uint32
-		posA, posB := 0, 0
-		for posA < len(valsA) && posB < len(valsB) {
-			valA, valB := valsA[posA], valsB[posB]
-			if valA < valB {
-				posA++
-			} else if valA > valB {
-				posB++
-			} else {
-				r = append(r, valA)
-				posA++
-				posB++
-			}
-		}
-
-		if len(r) > 0 {
-			result[p] = r
-		}
-	}
-
-	return result
-}
-
-func mergeOr(a, b indexPartitions) indexPartitions {
-	if len(a) == 0 {
-		return b
-	} else if len(b) == 0 {
-		return a
-	}
-
-	var ok bool
-	var p uint32
-	var valsA, valsB []uint32
-	result := make(indexPartitions)
-
-	for p, valsA = range a {
-		if valsB, ok = b[p]; !ok {
-			result[p] = valsA
-			continue
-		}
-
-		var r []uint32
-		posA, posB := 0, 0
-		for posA < len(valsA) && posB < len(valsB) {
-			valA, valB := valsA[posA], valsB[posB]
-			if valA < valB {
-				r = append(r, valA)
-				posA++
-			} else if valA > valB {
-				r = append(r, valB)
-				posB++
-			} else {
-				r = append(r, valA)
-				posA++
-				posB++
-			}
-		}
-
-		if posA < len(valsA) {
-			r = append(r, valsA[posA:]...)
-		} else if posB < len(valsB) {
-			r = append(r, valsB[posB:]...)
-		}
-
-		if len(r) > 0 {
-			result[p] = r
-		}
-	}
-
-	for p, valsB = range b {
-		if _, ok = a[p]; !ok {
-			result[p] = valsB
-		}
-	}
-
-	return result
-}
+var mcache *mCache
 
 type query struct {
 	From, To int
 	And, Or  []interface{}
 }
-
-type mergeFunc func(a, b indexPartitions) indexPartitions
 
 func parseQuery(idx *index, f mergeFunc, inf interface{}) indexPartitions {
 	switch value := inf.(type) {
@@ -329,14 +58,24 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	var q query
+	var err error
 	dec := json.NewDecoder(r.Body)
-	if err := dec.Decode(&q); err != nil {
-		log.Println(err)
+	if err = dec.Decode(&q); err != nil {
+		log.Println("failed to decode request", err)
 		http.Error(w, http.StatusText(400), 400)
 		return
 	}
 
-	idx := getIndexForEpoch(q.From)
+	t := time.Unix(int64(q.From), 0).UTC()
+	idx, err := mcache.getIndex(t)
+	if err != nil {
+		log.Println("failed to get index", err)
+		http.Error(w, http.StatusText(400), 400)
+		return
+	}
+
+	idx.borrow()
+	defer idx.release()
 
 	var v indexPartitions
 	if len(q.And) > 0 {
@@ -353,49 +92,57 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	log.Println("going to send N offsets", v.getSize(), substreams)
+	log.Println("going to send N offsets", v.size(), substreams)
 
 	h := r.Header
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
 
+	var buf []byte
 	buf4 := make([]byte, 4, 4)
 	buf64K := make([]byte, 65536, 65536)
 
+	send := func(b []byte) error {
+		if _, err = w.Write(intToByteArray(len(b), buf4)); err != nil {
+			return err
+		}
+
+		if _, err = w.Write(b); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
 	data := pb.Data{}
 	for p, offsets := range v {
-		dfile, ok := getDatabaseFile(q.From, int(p))
-		if !ok {
+		db, err := readDatabase(filePath, t, int(p))
+		if err != nil {
+			log.Println(err)
 			continue
 		}
 
-		defer dfile.Close()
+		db.borrow()
+		defer db.release()
 
-		for _, offset := range offsets {
-			if _, err := dfile.Seek(int64(offset), 0); err != nil {
-				log.Println("Failed to seek", err)
+		for _, off := range offsets {
+			offset := int(off)
+			if offset+uint32Size > len(db.data) {
+				log.Println("invalid offset", offset, len(db.data))
 				break
 			}
 
-			if rlen, err := dfile.Read(buf4); err != nil || rlen != len(buf4) {
-				log.Println("Failed to read length", err)
+			length := byteArrayToInt(db.data[offset : offset+uint32Size])
+			if offset+length+uint32Size > len(db.data) {
+				log.Println("invalid length", offset+length+uint32Size, len(db.data))
 				break
 			}
 
-			length := byteArrayToInt(buf4)
-			if length >= len(buf64K) {
-				log.Println("Too long message")
-				break
-			}
-
-			if rlen, err := dfile.Read(buf64K[:length]); err != nil || rlen != length {
-				log.Println("Failed to read body", rlen, length, err)
-				break
-			}
+			buf = db.data[offset+uint32Size : offset+uint32Size+length]
 
 			if len(substreams) > 0 {
 				data.Reset()
-				if err := data.Unmarshal(buf64K[:length]); err != nil {
+				if err = data.Unmarshal(buf); err != nil {
 					log.Println("Failed to decode", err)
 					break
 				}
@@ -409,49 +156,37 @@ func handler(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				var err error
 				data.Frames = payload
 				if length, err = data.MarshalTo(buf64K); err != nil {
 					log.Println("Failed to encode", err)
 					break
 				}
-			}
 
-			if wlen, err := w.Write(buf4); err != nil || wlen != len(buf4) {
-				log.Println("Failed to write response", err)
-				return
-			}
-
-			if wlen, err := w.Write(buf64K[:length]); err != nil || wlen != length {
-				log.Println("Failed to write response", err)
-				return
+				if err = send(buf64K[:length]); err != nil {
+					log.Println(err)
+					break
+				}
+			} else {
+				if err = send(buf); err != nil {
+					log.Println(err)
+					break
+				}
 			}
 		}
 	}
 }
 
-func getDatabaseFile(epoch, partition int) (*os.File, bool) {
-	fileName := fmt.Sprintf("%s%d-%d", filePath, epoch, partition)
-	if file, err := os.Open(fileName); err != nil {
-		log.Println("failed to open file "+fileName, err)
-		return nil, false
-	} else {
-		return file, true
-	}
-}
-
 func main() {
+	mcache = newmCache(filePath, time.Hour, 2*time.Hour)
 	http.HandleFunc("/", handler)
+	log.Println("start HTTP server", hostPort)
 	log.Fatal(http.ListenAndServe(hostPort, nil))
 }
 
-func byteArrayToInt(in []byte) (res int) {
-	res |= int(in[3])
-	res <<= 8
-	res |= int(in[2])
-	res <<= 8
-	res |= int(in[1])
-	res <<= 8
-	res |= int(in[0])
-	return res
+func intToByteArray(v int, out []byte) []byte {
+	out[3] = byte(v >> 24)
+	out[2] = byte(v >> 16)
+	out[1] = byte(v >> 8)
+	out[0] = byte(v)
+	return out
 }
