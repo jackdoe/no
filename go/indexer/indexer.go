@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -17,7 +18,6 @@ import (
 const numProccessors = 2
 const filePath = "/Users/ikruglov/tmp/indexer/"
 const hostPort = "127.0.0.1:8003"
-const maxOffset = 0x7FFFFFFF
 const maxTagLength = 40
 const maxTagsInMessage = 255
 const dequeItemSize = 1024
@@ -70,7 +70,8 @@ func (d *deque) AppendAll(da *deque) {
 }
 
 type compactionJob struct {
-	id, total int
+	partition int
+	totalMsg  int
 	index     map[string]*deque
 }
 
@@ -80,6 +81,7 @@ type compactionTick struct {
 }
 
 func main() {
+	log.Println("start UDP server", hostPort)
 	addr, err := net.ResolveUDPAddr("udp4", hostPort)
 	if err != nil {
 		log.Fatal("Failed to resolve addr:", err)
@@ -90,52 +92,69 @@ func main() {
 		log.Fatal("Failed to lister UDP socket:", err)
 	}
 
+	var wg sync.WaitGroup
 	quit := make(chan struct{})
-	done := make(chan struct{})
 	ticks := make([]chan compactionTick, numProccessors)
 
-	for i := 0; i < numProccessors; i++ {
+	for i := range ticks {
 		ticks[i] = make(chan compactionTick)
-		go processor(i, conn, ticks[i], quit, done)
+		go processor(i, conn, ticks[i], quit, &wg)
 	}
 
 	go func(tick <-chan time.Time) {
 		for {
-			ctick := &compactionTick{<-tick, make(chan compactionJob)}
-			go compactor(ctick.t, ctick.ch)
+			ctick := compactionTick{(<-tick).UTC(), make(chan compactionJob)}
+			go compactor(ctick.t, ctick.ch, &wg)
 			for _, tick := range ticks {
-				tick <- *ctick
+				tick <- ctick
 			}
 		}
-	}(time.Tick(1 * time.Second))
+	}(time.Tick(time.Second))
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
 	<-c
+
+	for _ = range ticks {
+		quit <- struct{}{}
+	}
+
+	log.Println("waiting for workers to complete")
+	// wg.Wait() TODO
+	log.Println("exiting")
 }
 
-func compactor(t time.Time, c chan compactionJob) {
-	total := 0
+func compactor(t time.Time, c chan compactionJob, wg *sync.WaitGroup) {
+	wg.Add(1)
+	defer wg.Done()
+
+	totalMsg := 0
 	epoch := t.Unix()
 	log.Printf("new compactor for epoch %d", epoch)
 
 	var jobs [numProccessors]compactionJob
 	for _ = range jobs {
 		cjob := <-c
-		total += cjob.total
-		jobs[cjob.id] = cjob
-		log.Printf("[%d] got compation job for epoch %d", cjob.id, epoch)
+		totalMsg += cjob.totalMsg
+		jobs[cjob.partition] = cjob
+		log.Printf("got compation job [%d] for epoch %d", cjob.partition, epoch)
 	}
 
-	log.Printf("got %d messages to compact for epoch %d", total, epoch)
-	if total == 0 {
+	log.Printf("got %d messages to compact for epoch %d", totalMsg, epoch)
+	if totalMsg == 0 {
 		return
 	}
 
-	fileName := fmt.Sprintf("%s%d-index", filePath, epoch)
-	file, err := os.OpenFile(fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0664)
+	dir, dirTmp, err := makePath(t)
 	if err != nil {
-		log.Println("Failed to open file "+fileName, err)
+		log.Println("Failed to create", dirTmp, err)
+		return
+	}
+
+	fileName := fmt.Sprintf("%s%d.idx", dirTmp, epoch)
+	file, err := createFile(fileName)
+	if err != nil {
+		log.Println("Failed to open file", fileName, err)
 		return
 	}
 
@@ -209,28 +228,40 @@ func compactor(t time.Time, c chan compactionJob) {
 			file.Write(vals[:di.idx*uint32Size])
 		}
 	}
+
+	log.Printf("rename %s to %s", dirTmp, dir)
+	if err = os.Rename(dirTmp, dir); err != nil {
+		log.Println("Failed to rename", dirTmp, dir, err)
+	}
 }
 
-func processor(id int, conn *net.UDPConn, tick <-chan compactionTick, quit, done chan struct{}) {
+func processor(partition int, conn *net.UDPConn, tick <-chan compactionTick, quit chan struct{}, wg *sync.WaitGroup) {
+	wg.Add(1)
+	defer wg.Done()
+
+	shouldQuit := false
 	buf := make([]byte, 65536+4, 65536+4)
 	index := make(map[string]*deque)
 	data := pb.Data{}
-	total := 0
+	totalMsg := 0
 
-	log.Printf("new processor %d", id)
+	log.Printf("new processor %d", partition)
 
 	var file *os.File
 	defer file.Close()
 	getFile := func(t time.Time) (*os.File, int64) {
 		if file == nil {
-			epoch := t.Unix()
-			fileName := fmt.Sprintf("%s%d-%d", filePath, epoch, id)
-			log.Printf("[%d] open new file %s for epoch %d", id, fileName, epoch)
-
-			var err error
-			file, err = os.OpenFile(fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0664)
+			_, fileName, err := makePath(t)
 			if err != nil {
-				log.Println("Failed to open file "+fileName, err)
+				log.Println("Failed to create path", fileName, err)
+				return nil, 0
+			}
+
+			fileName += fmt.Sprintf("%d.%d.data", t.Unix(), partition)
+			log.Printf("[%d] open new file %s for epoch %d", partition, fileName, t.Unix())
+
+			if file, err = createFile(fileName); err != nil {
+				log.Println("Failed to open file", fileName, err)
 				return nil, 0
 			}
 
@@ -249,21 +280,22 @@ func processor(id int, conn *net.UDPConn, tick <-chan compactionTick, quit, done
 loop:
 	for {
 		select {
-		case ct := <-tick:
-			log.Printf("[%d] send job to compactor\n", id)
-			ctick.ch <- compactionJob{id, total, index}
+		case <-quit:
+			shouldQuit = true
+			log.Printf("[%d] will quit", partition)
 
+		case ct := <-tick:
+			log.Printf("[%d] send job to compactor %d\n", partition, ctick.t.Unix())
+			ctick.ch <- compactionJob{partition, totalMsg, index}
 			index = make(map[string]*deque)
 			file.Close()
 			file = nil
-			total = 0
-
+			totalMsg = 0
 			ctick = ct
 
-			select {
-			case <-quit:
+			if shouldQuit {
+				log.Printf("[%d] quiting", partition)
 				break loop
-			default:
 			}
 
 		default:
@@ -288,19 +320,11 @@ loop:
 				continue
 			}
 
-			if offset > maxOffset {
-				// TODO possible open new file
-				log.Println("Too big offset")
-				continue
-			}
-
 			intToByteArray(uint32(length), buf[0:4])
 			if _, err := file.Write(buf[:length+4]); err != nil {
 				log.Println("Failed to write to file", err)
 				continue
 			}
-
-			// file.Sync()
 
 			tags := data.GetHeader().GetTags()
 			if len(tags) > maxTagsInMessage {
@@ -316,18 +340,26 @@ loop:
 
 				deque, ok := index[tag]
 				if !ok {
-					deque = newDeque(id)
+					deque = newDeque(partition)
 					index[tag] = deque
 				}
 
 				deque.Append(uint32(offset))
 			}
 
-			total++
+			totalMsg++
 		}
 	}
+}
 
-	done <- struct{}{}
+func createFile(fileName string) (*os.File, error) {
+	return os.OpenFile(fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0664)
+}
+
+func makePath(t time.Time) (string, string, error) {
+	final := fmt.Sprintf("%s/%s/%2d/%d", filePath, t.Format("2006010215"), t.Minute(), t.Unix())
+	tmp := final + ".tmp"
+	return final + "/", tmp + "/", os.MkdirAll(tmp, 0775)
 }
 
 func intToByteArray(v uint32, out []byte) []byte {
