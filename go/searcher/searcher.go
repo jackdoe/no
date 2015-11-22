@@ -71,7 +71,7 @@ func (idx *index) getTagPartitions(tag string) (indexPartitions, bool) {
 
 	count := byteArrayToInt(data[:4])
 	if count <= 0 || count*uint32Size >= len(data) { //count can't be 0
-		fmt.Println("count <= 0 || count*uint32Size >= len(data)", count)
+		log.Println("count <= 0 || count*uint32Size >= len(data)", count)
 		return nil, false
 	}
 
@@ -89,7 +89,7 @@ func (idx *index) getTagPartitions(tag string) (indexPartitions, bool) {
 		partition := pdata[pos]
 		size := int(pdata[pos+1])
 		if pos+size+2 > len(pdata) {
-			fmt.Println("pos+size+2 > len(pdata)", pos, size, len(pdata), partition)
+			log.Println("pos+size+2 > len(pdata)", pos, size, len(pdata), partition)
 			return nil, false
 		}
 		result[partition] = pdata[pos+2 : pos+2+size]
@@ -102,44 +102,51 @@ func (idx *index) getTagPartitions(tag string) (indexPartitions, bool) {
 func getIndex(fileName string) *index {
 	file, err := os.Open(fileName)
 	if err != nil {
-		log.Fatal("failed to open file "+fileName, err)
+		log.Println("failed to open file "+fileName, err)
+		return nil
 	}
 
 	defer file.Close()
 	fd := int(file.Fd())
 	stat, err := file.Stat()
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
+		return nil
 	}
 
 	pageAlignedSize := (stat.Size() + 4095) &^ 4095
 	if maxAllowedMappedSize-pageAlignedSize < 0 {
-		log.Fatal("mmaped to much")
+		log.Println("mmaped to much")
+		return nil
 	}
 
 	data, err := syscall.Mmap(fd, 0, int(pageAlignedSize), syscall.PROT_READ, syscall.MAP_PRIVATE)
 	if err != nil {
-		log.Fatal("Failed to mmap file", err)
+		log.Println("Failed to mmap file", err)
+		return nil
 	}
 
 	defer func() { syscall.Munmap(data) }()
 
 	err = syscall.Mlock(data)
 	if err != nil {
-		log.Fatal("Failed to mlock file", err)
+		log.Println("Failed to mlock file", err)
+		return nil
 	}
 
 	defer func() { syscall.Munlock(data) }()
 
 	pos := 0
 	if bytes.Compare([]byte(indexHeader), data[:indexHeaderSize]) != 0 {
-		log.Fatal("index file has incorrect format")
+		log.Println("index file has incorrect format")
+		return nil
 	}
 
 	pos += indexHeaderSize
 	version := data[pos]
 	if version != 1 {
-		log.Fatal("unsupported version ", version)
+		log.Println("unsupported version ", version)
+		return nil
 	}
 
 	pos++
@@ -148,7 +155,8 @@ func getIndex(fileName string) *index {
 	tagsCount := byteArrayToInt(data[pos : pos+4])
 	tagsArraySize := tagsCount * int(unsafe.Sizeof(itag))
 	if int64(tagsArraySize) > stat.Size() {
-		log.Fatal("tagsCount has invalid value")
+		log.Println("tagsCount has invalid value")
+		return nil
 	}
 
 	pos += 4
@@ -317,13 +325,13 @@ func parseQuery(idx *index, f mergeFunc, inf interface{}) indexPartitions {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("new request from", r.RemoteAddr)
+	log.Println("new request from", r.RemoteAddr)
 	defer r.Body.Close()
 
 	var q query
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&q); err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		http.Error(w, http.StatusText(400), 400)
 		return
 	}
@@ -345,7 +353,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	fmt.Println("going to send N offsets", v.getSize(), substreams)
+	log.Println("going to send N offsets", v.getSize(), substreams)
 
 	h := r.Header
 	h.Set("Content-Type", "text/event-stream")
@@ -353,24 +361,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	buf4 := make([]byte, 4, 4)
 	buf64K := make([]byte, 65536, 65536)
-
-	send := func(length int) bool {
-		if wlen, err := w.Write(buf4); err != nil || wlen != len(buf4) {
-			fmt.Println("Failed to write response", err)
-			return false
-		}
-
-		for length > 0 {
-			if wlen, err := w.Write(buf64K[:length]); err != nil {
-				fmt.Println("Failed to write response", err)
-				return false
-			} else {
-				length -= wlen
-			}
-		}
-
-		return true
-	}
 
 	data := pb.Data{}
 	for p, offsets := range v {
@@ -383,30 +373,30 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 		for _, offset := range offsets {
 			if _, err := dfile.Seek(int64(offset), 0); err != nil {
-				fmt.Println("Failed to seek", err)
+				log.Println("Failed to seek", err)
 				break
 			}
 
 			if rlen, err := dfile.Read(buf4); err != nil || rlen != len(buf4) {
-				fmt.Println("Failed to read length", err)
+				log.Println("Failed to read length", err)
 				break
 			}
 
 			length := byteArrayToInt(buf4)
 			if length >= len(buf64K) {
-				fmt.Println("Too long message")
+				log.Println("Too long message")
 				break
 			}
 
 			if rlen, err := dfile.Read(buf64K[:length]); err != nil || rlen != length {
-				fmt.Println("Failed to read body", rlen, length, err)
+				log.Println("Failed to read body", rlen, length, err)
 				break
 			}
 
 			if len(substreams) > 0 {
 				data.Reset()
 				if err := data.Unmarshal(buf64K[:length]); err != nil {
-					fmt.Println("Failed to decode", err)
+					log.Println("Failed to decode", err)
 					break
 				}
 
@@ -422,12 +412,18 @@ func handler(w http.ResponseWriter, r *http.Request) {
 				var err error
 				data.Frames = payload
 				if length, err = data.MarshalTo(buf64K); err != nil {
-					fmt.Println("Failed to encode", err)
+					log.Println("Failed to encode", err)
 					break
 				}
 			}
 
-			if !send(length) {
+			if wlen, err := w.Write(buf4); err != nil || wlen != len(buf4) {
+				log.Println("Failed to write response", err)
+				return
+			}
+
+			if wlen, err := w.Write(buf64K[:length]); err != nil || wlen != length {
+				log.Println("Failed to write response", err)
 				return
 			}
 		}
@@ -437,7 +433,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 func getDatabaseFile(epoch, partition int) (*os.File, bool) {
 	fileName := fmt.Sprintf("%s%d-%d", filePath, epoch, partition)
 	if file, err := os.Open(fileName); err != nil {
-		fmt.Println("failed to open file "+fileName, err)
+		log.Println("failed to open file "+fileName, err)
 		return nil, false
 	} else {
 		return file, true
