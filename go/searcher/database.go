@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -85,7 +86,7 @@ func readIndex(root string, t time.Time) (*index, error) {
 	pos += indexHeaderSize
 	version := data[pos]
 	if version != 1 {
-		return nil, fmt.Errorf("unsupported version", version)
+		return nil, fmt.Errorf("unsupported version %d", version)
 	}
 
 	pos++
@@ -93,7 +94,7 @@ func readIndex(root string, t time.Time) (*index, error) {
 	tagsCount := byteArrayToInt(data[pos : pos+4])
 	tagsArraySize := tagsCount * indexedTagSize
 	if tagsArraySize > len(data) {
-		return nil, fmt.Errorf("tagsArraySize > len(data)")
+		return nil, errors.New("tagsArraySize > len(data)")
 	}
 
 	pos += 4
@@ -286,7 +287,7 @@ func readDatabase(root string, t time.Time, partition int) (*database, error) {
 
 	version := md.d[databaseHeaderSize]
 	if version != 1 {
-		return nil, fmt.Errorf("unsupported version", version)
+		return nil, fmt.Errorf("unsupported version %d", version)
 	}
 
 	return &database{
