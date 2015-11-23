@@ -31,21 +31,14 @@ func newmCache(root string, soft, hard time.Duration) *mCache {
 
 	go func(tick <-chan time.Time) {
 		for {
-			waterMark := (<-tick).UTC()
-			waterMark = waterMark.Add(-mc.hard)
-
-			epoch := int(waterMark.Unix())
-			for bucket := epoch % len(mc.ring); bucket > 0; bucket-- {
+			waterMark := (<-tick).UTC().Add(-mc.hard)
+			for bucket := range mc.ring {
 				idx := mc.fetchIndex(bucket)
-				if idx == nil || idx.time.After(waterMark) {
-					break
-				}
-
-				log.Printf("evict %d (%s) next round of mCache eviction, water mark %d (%s)",
-					idx.time.Unix(), idx.time.Format("15:04:05"),
-					waterMark.Unix(), waterMark.Format("15:04:05"))
-
-				mc.storeIndex(bucket, nil)
+				if idx != nil && idx.time.Before(waterMark) {
+					log.Printf("evict %d (%s) (bucket %d) watermark %d (%s)",
+						idx.time.Unix(), idx.time.Format("15:04:05"), bucket,
+						waterMark.Unix(), waterMark.Format("15:04:05"))
+					mc.storeIndex(bucket, nil)
 			}
 		}
 	}(time.Tick(time.Second))
@@ -61,7 +54,7 @@ func (mc *mCache) fetchIndex(bucket int) *index {
 func (mc *mCache) storeIndex(bucket int, idx *index) {
 	ptr := (*unsafe.Pointer)(unsafe.Pointer(&mc.ring[bucket]))
 	if oidx := (*index)(atomic.SwapPointer(ptr, unsafe.Pointer(idx))); oidx != nil {
-		log.Printf("evicting idx for %d (bucket %d)", oidx.time.Unix(), bucket)
+		log.Printf("forced eviction of idx for %d (bucket %d)", oidx.time.Unix(), bucket)
 		if oidx.counter() > 0 {
 			log.Printf("LEAKED INDEX STRUCT %d!!!!!!!!", oidx.time.Unix())
 			mc.leak = append(mc.leak, oidx)
