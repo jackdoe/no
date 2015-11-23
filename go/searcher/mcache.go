@@ -29,7 +29,7 @@ func newmCache(root string, soft, hard time.Duration) *mCache {
 	mc := &mCache{
 		idxRing: make([]*index, idxRingSize, idxRingSize),
 		idxLeak: make([]*index, 0),
-		dbLeak: make([]*database, 0),
+		dbLeak:  make([]*database, 0),
 		root:    root,
 		soft:    soft,
 		hard:    hard,
@@ -75,7 +75,10 @@ func (mc *mCache) fetchIndex(bucket int) *index {
 func (mc *mCache) storeIndex(bucket int, idx *index) {
 	ptr := (*unsafe.Pointer)(unsafe.Pointer(&mc.idxRing[bucket]))
 	if oidx := (*index)(atomic.SwapPointer(ptr, unsafe.Pointer(idx))); oidx != nil {
-		log.Printf("forced eviction of idx for %d (bucket %d)", oidx.time.Unix(), bucket)
+		if idx != nil {
+			log.Printf("FORCED eviction of idx for %d (bucket %d)", oidx.time.Unix(), bucket)
+		}
+
 		if oidx.counter() > 0 {
 			log.Printf("LEAKED INDEX STRUCT %d!!!!!!!!", oidx.time.Unix())
 			mc.idxLeak = append(mc.idxLeak, oidx)
@@ -119,7 +122,9 @@ func (mc *mCache) fetchDb(p, bucket int) *database {
 func (mc *mCache) storeDb(p, bucket int, db *database) {
 	ptr := (*unsafe.Pointer)(unsafe.Pointer(&mc.dbRings[p][bucket]))
 	if odb := (*database)(atomic.SwapPointer(ptr, unsafe.Pointer(db))); odb != nil {
-		log.Printf("forced eviction of db for %d (p%d bucket %d)", odb.time.Unix(), p, bucket)
+		if db != nil {
+			log.Printf("FORCED eviction of db for %d (p%d bucket %d)", odb.time.Unix(), p, bucket)
+		}
 		if odb.counter() > 0 {
 			log.Printf("LEAKED DATABASE STRUCT %d p%d!!!!!!!!", odb.time.Unix(), p)
 			mc.dbLeak = append(mc.dbLeak, odb)
