@@ -116,7 +116,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	data := pb.Data{}
 	for p, offsets := range v {
-		db, err := readDatabase(filePath, t, int(p))
+		db, err := mcache.getDatabase(int(p), t)
 		if err != nil {
 			log.Println(err)
 			continue

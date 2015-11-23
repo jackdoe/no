@@ -265,7 +265,7 @@ func mergeOr(a, b indexPartitions) indexPartitions {
 type database struct {
 	data      []byte
 	partition int
-	t         time.Time
+	time      time.Time
 	md        *mmapData
 	ver       byte
 	atomicCounter
@@ -293,7 +293,7 @@ func readDatabase(root string, t time.Time, partition int) (*database, error) {
 	return &database{
 		data:      md.d,
 		partition: partition,
-		t:         t,
+		time:      t,
 		md:        md,
 		ver:       version,
 	}, nil
