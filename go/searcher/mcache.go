@@ -29,9 +29,14 @@ func newmCache(root string, soft, hard time.Duration) *mCache {
 	mc := &mCache{
 		idxRing: make([]*index, idxRingSize, idxRingSize),
 		idxLeak: make([]*index, 0),
+		dbLeak: make([]*database, 0),
 		root:    root,
 		soft:    soft,
 		hard:    hard,
+	}
+
+	for i := range mc.dbRings {
+		mc.dbRings[i] = make([]*database, idxRingSize, idxRingSize)
 	}
 
 	go func(tick <-chan time.Time) {
@@ -85,7 +90,7 @@ func (mc *mCache) getIndex(t time.Time) (*index, error) {
 			t.Unix(), mc.soft.String())
 	}
 
-	bucket := int(t.Unix()) & len(mc.idxRing)
+	bucket := int(t.Unix()) % len(mc.idxRing)
 	idx := mc.fetchIndex(bucket)
 
 	if idx != nil {
@@ -133,7 +138,7 @@ func (mc *mCache) getDatabase(partition int, t time.Time) (*database, error) {
 		return nil, fmt.Errorf("invalid requested partition")
 	}
 
-	bucket := int(t.Unix()) & len(mc.dbRings[partition])
+	bucket := int(t.Unix()) % len(mc.dbRings[partition])
 	db := mc.fetchDb(partition, bucket)
 
 	if db != nil {
@@ -149,7 +154,7 @@ func (mc *mCache) getDatabase(partition int, t time.Time) (*database, error) {
 		return nil, err
 	}
 
-	log.Println("cache index for", t.Unix())
+	log.Println("cache database for", partition, t.Unix())
 	mc.storeDb(partition, bucket, db)
 	return db, nil
 }

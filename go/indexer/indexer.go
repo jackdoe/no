@@ -207,7 +207,6 @@ func compactor(t time.Time, c chan compactionJob, wg *sync.WaitGroup) {
 		file.WriteString(t)
 	}
 
-	partition := -1
 	calcPartitionSize := func(di *dequeItem) (res int) {
 		for p := di.partition; di != nil && p == di.partition; di, res = di.next, res+di.idx {
 		}
@@ -217,6 +216,8 @@ func compactor(t time.Time, c chan compactionJob, wg *sync.WaitGroup) {
 	for _, t := range tagsArray {
 		d := tags[t]
 		file.Write(intToByteArray(uint32(d.size+2*d.partitions), buf4))
+
+		partition := -1
 		for di := d.head; di != nil; di = di.next {
 			if di.partition != partition {
 				partition = di.partition
@@ -357,7 +358,7 @@ func createFile(fileName string) (*os.File, error) {
 }
 
 func makePath(t time.Time) (string, string, error) {
-	final := fmt.Sprintf("%s/%s/%2d/%d", filePath, t.Format("2006010215"), t.Minute(), t.Unix())
+	final := fmt.Sprintf("%s/%s/%02d/%d", filePath, t.Format("2006010215"), t.Minute(), t.Unix())
 	tmp := final + ".tmp"
 	return final + "/", tmp + "/", os.MkdirAll(tmp, 0775)
 }

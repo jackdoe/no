@@ -344,7 +344,7 @@ func mmapFile(fileName string) (*mmapData, error) {
 }
 
 func buildPath(root string, t time.Time) string {
-	return fmt.Sprintf("%s/%s/%2d/%d/", root, t.Format("2006010215"), t.Minute(), t.Unix())
+	return fmt.Sprintf("%s/%s/%02d/%d/", root, t.Format("2006010215"), t.Minute(), t.Unix())
 }
 
 func buildIndexFile(root string, t time.Time) string {
