@@ -2,15 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
 
 	pb "github.com/jackdoe/no/go/datapb"
 )
-
-const filePath = "/Users/ikruglov/tmp/indexer/"
-const hostPort = "127.0.0.1:8005"
 
 var mcache *mCache
 
@@ -177,10 +176,17 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	mcache = newmCache(filePath, time.Hour, 2*time.Hour)
+	var ip = flag.String("ip", "0.0.0.0", "ip address")
+	var port = flag.Int("port", 8005, "port")
+	var root = flag.String("root", ".", "root directory")
+	flag.Parse()
+
+	mcache = newmCache(*root, time.Hour, 2*time.Hour)
+
+	ipPort := fmt.Sprintf("%s:%d", *ip, *port)
 	http.HandleFunc("/", handler)
-	log.Println("start HTTP server", hostPort)
-	log.Fatal(http.ListenAndServe(hostPort, nil))
+	log.Println("start HTTP server", ipPort)
+	log.Fatal(http.ListenAndServe(ipPort, nil))
 }
 
 func intToByteArray(v int, out []byte) []byte {

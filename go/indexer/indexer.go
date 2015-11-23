@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -15,9 +16,6 @@ import (
 	pb "github.com/jackdoe/no/go/datapb"
 )
 
-const numProccessors = 2
-const filePath = "/Users/ikruglov/tmp/indexer/"
-const hostPort = "127.0.0.1:8003"
 const maxTagLength = 40
 const maxTagsInMessage = 255
 const dequeItemSize = 1024
@@ -26,6 +24,8 @@ const indexFileHeader = "=idxi\x01"
 const dataFileHeader = "=idxd\x01"
 const indexedTagSize = 8
 const uint32Size = 4
+
+var rootDir string
 
 type dequeItem struct {
 	idx, partition int
@@ -81,8 +81,17 @@ type compactionTick struct {
 }
 
 func main() {
-	log.Println("start UDP server", hostPort)
-	addr, err := net.ResolveUDPAddr("udp4", hostPort)
+	var ip = flag.String("ip", "0.0.0.0", "ip address")
+	var port = flag.Int("port", 8003, "port")
+	var root = flag.String("root", ".", "root directory")
+	var proc = flag.Int("proc", 2, "number of worker threads")
+	flag.Parse()
+
+	rootDir = *root
+	ipPort := fmt.Sprintf("%s:%d", *ip, *port)
+
+	log.Println("start UDP server", ipPort)
+	addr, err := net.ResolveUDPAddr("udp4", ipPort)
 	if err != nil {
 		log.Fatal("Failed to resolve addr:", err)
 	}
@@ -94,7 +103,7 @@ func main() {
 
 	var wg sync.WaitGroup
 	quit := make(chan struct{})
-	ticks := make([]chan compactionTick, numProccessors)
+	ticks := make([]chan compactionTick, *proc)
 
 	for i := range ticks {
 		ticks[i] = make(chan compactionTick)
@@ -104,7 +113,7 @@ func main() {
 	go func(tick <-chan time.Time) {
 		for {
 			ctick := compactionTick{(<-tick).UTC(), make(chan compactionJob)}
-			go compactor(ctick.t, ctick.ch, &wg)
+			go compactor(ctick.t, ctick.ch, *proc, &wg)
 			for _, tick := range ticks {
 				tick <- ctick
 			}
@@ -124,7 +133,7 @@ func main() {
 	log.Println("exiting")
 }
 
-func compactor(t time.Time, c chan compactionJob, wg *sync.WaitGroup) {
+func compactor(t time.Time, c chan compactionJob, proc int, wg *sync.WaitGroup) {
 	wg.Add(1)
 	defer wg.Done()
 
@@ -132,7 +141,7 @@ func compactor(t time.Time, c chan compactionJob, wg *sync.WaitGroup) {
 	epoch := t.Unix()
 	log.Printf("new compactor for epoch %d", epoch)
 
-	var jobs [numProccessors]compactionJob
+	jobs := make([]compactionJob, proc, proc)
 	for _ = range jobs {
 		cjob := <-c
 		totalMsg += cjob.totalMsg
@@ -358,7 +367,7 @@ func createFile(fileName string) (*os.File, error) {
 }
 
 func makePath(t time.Time) (string, string, error) {
-	final := fmt.Sprintf("%s/%s/%02d/%d", filePath, t.Format("2006010215"), t.Minute(), t.Unix())
+	final := fmt.Sprintf("%s/%s/%02d/%d", rootDir, t.Format("2006010215"), t.Minute(), t.Unix())
 	tmp := final + ".tmp"
 	return final + "/", tmp + "/", os.MkdirAll(tmp, 0775)
 }
