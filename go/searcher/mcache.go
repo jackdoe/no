@@ -39,13 +39,13 @@ func newmCache(root string, soft, hard time.Duration) *mCache {
 				idx := mc.fetchIndex(bucket)
 				if idx == nil || idx.time.After(waterMark) {
 					break
-				} else {
-					log.Printf("evict %d (%s) next round of mCache eviction, water mark %d (%s)",
-						idx.time.Unix(), idx.time.Format("15:04:05"),
-						waterMark.Unix(), waterMark.Format("15:04:05"))
-
-					mc.storeIndex(bucket, nil)
 				}
+
+				log.Printf("evict %d (%s) next round of mCache eviction, water mark %d (%s)",
+					idx.time.Unix(), idx.time.Format("15:04:05"),
+					waterMark.Unix(), waterMark.Format("15:04:05"))
+
+				mc.storeIndex(bucket, nil)
 			}
 		}
 	}(time.Tick(time.Second))
