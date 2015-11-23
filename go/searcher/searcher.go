@@ -62,7 +62,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	if err = dec.Decode(&q); err != nil {
 		log.Println("failed to decode request", err)
-		http.Error(w, http.StatusText(400), 400)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
@@ -70,7 +70,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	idx, err := mcache.getIndex(t)
 	if err != nil {
 		log.Println("failed to get index", err)
-		http.Error(w, http.StatusText(400), 400)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
