@@ -43,6 +43,7 @@ func newmCache(root string, soft, hard time.Duration) *mCache {
 					log.Printf("evict idx %d %s (bucket %d)",
 						idx.time.Unix(), idx.time.Format("15:04:05"), bucket)
 					mc.storeIndex(bucket, nil)
+				}
 			}
 
 			for p, ring := range mc.dbRings {
