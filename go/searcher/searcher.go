@@ -11,6 +11,8 @@ import (
 	pb "github.com/jackdoe/no/go/datapb"
 )
 
+import _ "net/http/pprof"
+
 var mcache *mCache
 
 type query struct {
@@ -179,7 +181,15 @@ func main() {
 	var ip = flag.String("ip", "0.0.0.0", "ip address")
 	var port = flag.Int("port", 8005, "port")
 	var root = flag.String("root", ".", "root directory")
+	var netprofile = flag.Bool("netprofile", false, "open socket for remote profiling")
 	flag.Parse()
+
+	if *netprofile {
+		go func() {
+			log.Println("start debug HTTP server")
+			log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
+		}()
+	}
 
 	mcache = newmCache(*root, time.Hour, 2*time.Hour)
 

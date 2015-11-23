@@ -16,6 +16,11 @@ import (
 	pb "github.com/jackdoe/no/go/datapb"
 )
 
+import (
+	"net/http"
+	_ "net/http/pprof"
+)
+
 const maxTagLength = 40
 const maxTagsInMessage = 255
 const dequeItemSize = 1024
@@ -85,7 +90,15 @@ func main() {
 	var port = flag.Int("port", 8003, "port")
 	var root = flag.String("root", ".", "root directory")
 	var proc = flag.Int("proc", 2, "number of worker threads")
+	var netprofile = flag.Bool("netprofile", false, "open socket for remote profiling")
 	flag.Parse()
+
+	if *netprofile {
+		go func() {
+			log.Println("start debug HTTP server")
+			log.Println(http.ListenAndServe("0.0.0.0:6061", nil))
+		}()
+	}
 
 	rootDir = *root
 	ipPort := fmt.Sprintf("%s:%d", *ip, *port)
