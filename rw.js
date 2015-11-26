@@ -15,23 +15,17 @@ var udp = dgram.createSocket('udp4');
 var path = require('path');
 var messages = protobuf(fs.readFileSync(path.resolve(__dirname, 'data.proto')));
 
-var argv = require('optimist')
-    .default('root','/tmp/messages/')
-    .default('writer',0)
-    .default('udp',0)
-    .default('searcher',0)
-    .default('node_id',0)
-    .argv;
+var argv = require('minimist')(process.argv.slice(2));
 
 var WCOUNTER = 0;
 var RCOUNTER = 0;
 var NAME_TO_STORE = {};
-var ROOT = argv.root;
+var ROOT = argv.root || '/tmp/messages/';
 
-var WRITER_PORT = argv.writer;
-var NODE_ID = argv.node_id;
-var WRITER_UDP_PORT = argv.udp
-var SEARCHER_PORT = argv.searcher;
+var WRITER_PORT = argv.writer || 0;
+var NODE_ID = argv.node_id || 0;
+var WRITER_UDP_PORT = argv.udp || 0;
+var SEARCHER_PORT = argv.searcher || 0;
 var POOL = (argv.pool instanceof Array ? argv.pool : [argv.pool] )
     .filter(function(e) { return e })
     .map(function(e) {
