@@ -194,6 +194,14 @@ function DocumentIdentifier() {
         return this.time_id == Number.MAX_VALUE;
     }
 
+    this.is_paused = function() {
+        return this.time_id == Number.MIN_VALUE;
+    }
+
+    this.set_paused = function() {
+        this.time_id = Number.MIN_VALUE;
+    }
+
     this.set_from_hash = function(other) {
         this.time_id = parseInt(other.time_id);
         this.offset = parseInt(other.offset);
@@ -202,6 +210,8 @@ function DocumentIdentifier() {
     this.to_string = function() {
         if (this.no_more())
             return  "NO_MORE";
+        if (this.is_paused())
+            return  "PAUSED";
         if (this.time_id == -1)
             return "NO_INIT";
         return "time_id: " + this.time_id + ",offset: " + this.offset;
@@ -216,7 +226,7 @@ function Term(tag) {
     this.time_id = time_dec(time());
     this.fd = -1;
     this.buffer = new Buffer(6);
-    this.from = undefined;
+    this.from = time_dec(time());
     this.to = undefined;
     this.size = 0;
     this.not_initialized = true;
@@ -224,7 +234,7 @@ function Term(tag) {
     this.set_time_id_range = function(from,to) {
         this.from = parseInt(from) || time_dec(time());
         this.time_id = this.from;
-        this.to = to ? parseInt(to) : time();
+        this.to = to ? parseInt(to) : undefined;
     }
 
     this.left = function() { return this.size - this.offset };
@@ -246,7 +256,7 @@ function Term(tag) {
     }
 
     this.pick_closest_non_zero_file = function(temp_time_id) {
-        var end = this.to;
+        var end = this.to || time();
         while(temp_time_id <= end) {
             if (this.open_time_id(temp_time_id))
                 return true;
@@ -282,7 +292,6 @@ function Term(tag) {
 
         if (this.has_something_left_in_current_file())
             return true;
-
         return this.pick_closest_non_zero_file(time_inc(this.time_id));
     }
 
@@ -304,7 +313,10 @@ function Term(tag) {
             }
         }
 
-        this.doc_id.reset();
+        if (!this.to)
+            this.doc_id.set_paused();
+        else
+            this.doc_id.reset();
         return this.doc_id;
     }
     this.to_string = function () {
@@ -379,7 +391,7 @@ function BoolOr() {
         }
 
         while(true) {
-            if (this.doc_id.no_more())
+            if (this.doc_id.no_more() || this.doc_id.is_paused())
                 return this.doc_id;
 
             if (this.doc_id.equals(to_doc_id))
@@ -402,15 +414,21 @@ function BoolOr() {
             return this.doc_id;
 
         this.new_doc.reset();
+        var has_only_pauses = 0;
         for (var i = 0; i < this.queries.length; i++) {
             var cur_doc = this.queries[i].doc_id;
             if (cur_doc.equals(this.doc_id) || cur_doc.time_id == -1)
                 cur_doc = this.queries[i].next();
+            if (cur_doc.is_paused())
+                has_only_pauses++;
 
-            if (cur_doc.cmp(this.new_doc) < 0)
+            if (cur_doc.cmp(this.new_doc) < 0 && !cur_doc.is_paused())
                 this.new_doc.set(cur_doc);
         }
-        this.doc_id.set(this.new_doc);
+        if (has_only_pauses == this.queries.length)
+            this.doc_id.set_paused()
+        else
+            this.doc_id.set(this.new_doc);
         return this.doc_id;
     }
 
@@ -458,6 +476,11 @@ function BoolAnd() {
             var biggest = undefined;
             for (var i = 0; i < this.or.queries.length; i++) {
                 var qdoc_id = this.or.queries[i].doc_id;
+                if (qdoc_id.is_paused()) {
+                    this.doc_id.set(qdoc_id);
+                    return this.doc_id;
+                }
+
                 if (qdoc_id.equals(new_doc))
                     n++;
                 if (!biggest || qdoc_id.cmp(biggest) > 0)
@@ -525,12 +548,15 @@ var searcher = http.createServer(function (request, response) {
     var body = '';
     request.on('data', function (data) { body += data; });
 
+    var interval = undefined;
     var cache = {};
     var cleanup = function() {
         for (var k in cache) {
             cache[k].cleanup();
             delete cache[k];
         }
+        if (interval)
+            clearInterval(interval);
     };
 
     var send = function(bytes) {
@@ -573,15 +599,21 @@ var searcher = http.createServer(function (request, response) {
             obj = JSON.parse(body);
             var q = parse(obj);
             var n;
-            while(true) {
-                var n = q.next()
-                if (n.no_more()) {
-                    response.end();
-                    cleanup();
-                    break;
-                }
-                send(get_store_obj(n.time_id,cache).get(n.offset));
-            };
+            setInterval(function() {
+                while(true) {
+                    var n = q.next()
+
+                    if (n.is_paused())
+                        return;
+
+                    if (n.no_more()) {
+                        response.end();
+                        cleanup();
+                        break;
+                    }
+                    send(get_store_obj(n.time_id,cache).get(n.offset));
+                };
+            }, 1000);
         } catch(e) {
             err_handler(response,e,undefined);
         };
@@ -589,8 +621,6 @@ var searcher = http.createServer(function (request, response) {
         response.on('end', function() { cleanup() });
     });
     request.connection.on('close',function(){ cleanup() });
-
-
 });
 
 var acceptor = http.createServer(function (request, response) {
