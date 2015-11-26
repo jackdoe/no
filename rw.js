@@ -22,10 +22,10 @@ var RCOUNTER = 0;
 var NAME_TO_STORE = {};
 var ROOT = argv.root || '/tmp/messages/';
 
-var WRITER_PORT = argv.writer || 0;
+var WRITER_PORT = argv.writer || 8001;
 var NODE_ID = argv.node_id || 0;
 var WRITER_UDP_PORT = argv.udp || 0;
-var SEARCHER_PORT = argv.searcher || 0;
+var SEARCHER_PORT = argv.searcher || 8002;
 var POOL = (argv.pool instanceof Array ? argv.pool : [argv.pool] )
     .filter(function(e) { return e })
     .map(function(e) {
@@ -36,102 +36,14 @@ var POOL = (argv.pool instanceof Array ? argv.pool : [argv.pool] )
         return { host: u.hostname, port: u.port || WRITER_UDP_PORT }
     });
 
+var Store = require('./store.js')(ROOT, NODE_ID);
+
 var TERMINATED = new Buffer(1);
 TERMINATED.fill(0);
 
 Array.prototype.random = function () {
   return this[Math.floor((Math.random()*this.length))];
 }
-
-function Store(time_id) {
-    this.time_id = time_id;
-    if (!fs.existsSync(ROOT + time_id))
-        fs.mkdirSync(ROOT + time_id);
-    this.fn = ROOT + time_id + '/main.txt';
-    this.fd = fs.openSync(this.fn, 'a+')
-    this.position = fs.statSync(this.fn).size;
-    this.fd_tags = {}
-}
-
-Store.prototype.fsyncSync = function() {
-    for (var k in this.fd_tags) {
-        fs.fsyncSync(this.fd_tags[k]);
-    }
-    fs.fsyncSync(this.fd);
-}
-
-Store.prototype.cleanup = function() {
-    for (var k in this.fd_tags) {
-        fs.closeSync(this.fd_tags[k]);
-    }
-    fs.closeSync(this.fd);
-}
-
-Store.prototype.log = function(msg, level) {
-    msg = this.fn + ": " + msg;
-    if (level == 0)
-        throw(new Error(msg));
-    else
-        console.log(msg);
-}
-
-Store.prototype.append = function(data) {
-    if (data.length > 0xFFFFFF || data.length == 0)
-        this.log("data.length("+data.length+") > 0xFFFFFF",0);
-
-    data.header.time_id = this.time_id;
-    data.header.offset = this.position;
-    data.header.node_id = NODE_ID;
-
-    var encoded = messages.Data.encode(data);
-
-    // XXX: make the protobuf decoder understand streams and offsets, instead of writing the length here
-    var blen = new Buffer(4);
-    blen.fill(0);
-    blen.writeUInt32BE(encoded.length, 0);
-
-    var n_written = fs.writeSync(this.fd, blen, 0, blen.length, this.position);
-    if (n_written != blen.length)
-        this.log("failed to write "+blen.length+" bytes, got: " + n_written, 0);
-
-    if (fs.writeSync(this.fd, encoded, 0, encoded.length, this.position + blen.length) != encoded.length)
-        this.log("failed to write " + encoded.length + " bytes", 0);
-
-    var buf = new Buffer(6);
-    buf.fill(0);
-    buf.writeUInt16BE(this.position & 0xFFFF, 0);
-    buf.writeUInt32BE(this.position >> 16, 2);
-
-    this.position += encoded.length + blen.length;
-    var tags = data.header.tags;
-    for (var i = 0; i < tags.length; i++) {
-        var tag = tags[i];
-        if (tag) {
-            fd = this.fd_tags[tag];
-            if (!fd) {
-                fd = fs.openSync(fn_for_tag(this.time_id, tag),'a');
-                this.fd_tags[tag] = fd;
-            }
-            fs.writeSync(fd, buf, 0, buf.length); // A write that's under the size of 'PIPE_BUF' is supposed to be atomic
-        }
-    }
-
-    return encoded;
-};
-
-Store.prototype.get = function(offset) {
-    var blen = new Buffer(4);
-    var n_read = fs.readSync(this.fd, blen, 0, 4, offset);
-    if (n_read != 4)
-        this.log("failed to read 4 bytes, got: " + n_read + " at offset: " + offset,0);
-
-    var len = blen.readUInt32BE(0);
-    var buffer = new Buffer(len);
-    n_read = fs.readSync(this.fd, buffer, 0, len, offset + 4);
-    if (n_read != len)
-        this.log("failed to read " + len + " bytes, got: " + n_read + ", from offset: " + offset, 0);
-    return buffer;
-};
 
 var fn_for_tag = function(time_id,tag) {
     return ROOT + time_id + '/tag#' + tag + '.txt';
@@ -256,7 +168,7 @@ function Term(tag) {
             this.fd = -1;
         }
 
-        var name = fn_for_tag(tid, this.tag);
+        var name = Store.fn_for_tag(tid, this.tag);
         if (fs.existsSync(name)) {
             this.time_id = tid;
             this.fd = fs.openSync(name, 'r');
