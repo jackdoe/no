@@ -604,7 +604,7 @@ var searcher = http.createServer(function (request, response) {
                     var n = q.next()
 
                     if (n.is_paused())
-                        return;
+                        break;
 
                     if (n.no_more()) {
                         response.end();
