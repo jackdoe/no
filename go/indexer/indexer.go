@@ -101,6 +101,8 @@ func main() {
 	}
 
 	rootDir = *root
+	os.MkdirAll(rootDir, 0775)
+
 	ipPort := fmt.Sprintf("%s:%d", *ip, *port)
 
 	log.Println("start UDP server", ipPort)

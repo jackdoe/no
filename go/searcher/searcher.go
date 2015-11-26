@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	pb "github.com/jackdoe/no/go/datapb"
@@ -191,6 +192,7 @@ func main() {
 		}()
 	}
 
+	os.MkdirAll(root, 0775)
 	mcache = newmCache(*root, time.Hour, 2*time.Hour)
 
 	ipPort := fmt.Sprintf("%s:%d", *ip, *port)
