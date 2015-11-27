@@ -42,8 +42,7 @@ Me.prototype.listener_function = function() {
             console.log("GOTCHA!");
 
             if (message.header.type == messages.Ensamble_Header.Type.HELLO) {
-                console
-                        .log("I can see a hello, I am promoting this socket to a Member..!!!");
+                console.log("I can see a hello, I am promoting this socket to a Member..!!!");
 
                 var hello_data = {
                     'header' : {

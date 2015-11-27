@@ -3,7 +3,7 @@ var net = require("net");
 var url = require("url");
 var protobuf = require('protocol-buffers')
 var path = require('path');
-var messages = protobuf(fs.readFileSync(path.resolve(__dirname, 'data.proto')));
+//var messages = protobuf(fs.readFileSync(path.resolve(__dirname, 'data.proto')));
 
 const
 util = require('util');
@@ -85,27 +85,7 @@ Member.prototype.open_connection = function() {
 }
 
 Member.prototype.send = function(type, payload) {
-
-    var data = {
-        'header' : {
-            'node_id' : 6,
-            'type' : messages.Ensamble_Header.Type[type]
-        }
-    };
-
-    if (payload != undefined) {
-        data["payload"] = {
-            "data" : payload
-        };
-    }
-
-    var encoded_data = messages.Ensamble_Message.encode(data);
-
-    var blen = new Buffer(4);
-    blen.fill(0);
-    blen.writeUInt32BE(encoded_data.length, 0);
-
-    var send_buffer = Buffer.concat([ blen, encoded_data ]);
+    var send_buffer = protocol_decoder.encode_message(6, type, payload);
 
     this.client.write(send_buffer, function() {
         console.log("I have sent my message of type: " + type);

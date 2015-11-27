@@ -58,4 +58,27 @@ protocol_decoder.prototype.decode_socket = function(socket) {
     });
 }
 
+protocol_decoder.prototype.encode_message = function(node_id, type, payload) {
+    var data = {
+        'header' : {
+            'node_id' : node_id,
+            'type' : this.messages.Ensamble_Header.Type[type]
+        }
+    };
+
+    if (payload != undefined) {
+        data["payload"] = {
+            "data" : payload
+        };
+    }
+
+    var encoded_data = this.messages.Ensamble_Message.encode(data);
+
+    var blen = new Buffer(4);
+    blen.fill(0);
+    blen.writeUInt32BE(encoded_data.length, 0);
+
+    return Buffer.concat([ blen, encoded_data ]);
+}
+
 module.exports = new protocol_decoder();
