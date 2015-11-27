@@ -17,7 +17,6 @@ var messages = protobuf(fs.readFileSync(path.resolve(__dirname, 'data.proto')));
 
 var ensamble = require('./ensamble');
 
-
 console.dir(ensamble);
 
 var argv = require('minimist')(process.argv.slice(2));
