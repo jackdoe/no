@@ -16,7 +16,7 @@ function Member(node, client) {
     this.client = undefined;
 
     if (client) {
-        this.init_client(this, client);
+        this.init_client(client);
     } else {
         this.open_connection();
     }
@@ -30,24 +30,23 @@ Member.prototype.getName = function() {
     return this.node;
 }
 
-Member.prototype.init_client = function(me, client) {
-
+Member.prototype.init_client = function(client) {
     client.on('close', function() {
         console.log("seding bye!");
-        me.emit('bye');
-    });
+        this.emit('bye');
+    }.bind(this));
 
-    client.on('decoded_message', me.onMessage.bind(me));
+    client.on('decoded_message', this.onMessage.bind(this));
 
-    me.name = client.name
-    me.client = client;
+    this.name = client.name
+    this.client = client;
 }
 
 Member.prototype.onMessage = function(message, socket) {
-    console.log("I got a decoded message from node: " + this.node);
+    var message_type = protocol_decoder.message_types[message.header.type]
+    this.emit(message_type, message);
 
-    this.emit(protocol_decoder.message_types[message.header.type], message);
-
+    console.log("I got a decoded a " + message_type + " message from node: " + this.node);
     console.log(message);
 }
 
@@ -56,7 +55,6 @@ Member.prototype.open_connection = function() {
 
     var me = this;
     var up = url.parse(this.node);
-    console.dir(up);
 
     var client = net.connect({
         host : up.hostname,
@@ -68,7 +66,7 @@ Member.prototype.open_connection = function() {
 
     client.on('connect', function(conn) {
         console.log('connection establ');
-        me.init_client(me, client);
+        this.init_client(client);
         protocol_decoder.decode_socket(client);
 
         this.send("HELLO");

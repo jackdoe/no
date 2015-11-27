@@ -10,10 +10,8 @@ var protobuf = require('protocol-buffers')
 var path = require('path');
 var messages = protobuf(fs.readFileSync(path.resolve(__dirname, 'data.proto')));
 
-const
-util = require('util');
-const
-EventEmitter = require('events');
+const util = require('util');
+const EventEmitter = require('events');
 
 var Member = require("./member.js");
 
@@ -115,8 +113,7 @@ Ensamble.prototype.start = function(port) {
 
     this.me.on('HELLO',
             function(socket) {
-                console.log("I received a hello from a new connection: "
-                        + socket.name);
+                console.log("I received a hello from a new connection: " + socket.name);
 
                 this._addMember(new Member(socket.name, socket));
             }.bind(this));
