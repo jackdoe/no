@@ -1,5 +1,5 @@
 message Ensamble_Payload {
-	required string data = 2;
+	required bytes data = 2;
 }
 
 message Ensamble_Header {

@@ -3,12 +3,9 @@ var net = require("net");
 var url = require("url");
 var protobuf = require('protocol-buffers')
 var path = require('path');
-//var messages = protobuf(fs.readFileSync(path.resolve(__dirname, 'data.proto')));
 
-const
-util = require('util');
-const
-EventEmitter = require('events');
+const util = require('util');
+const EventEmitter = require('events');
 
 var protocol_decoder = require('./protocol_decoder.js');
 
