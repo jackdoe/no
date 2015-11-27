@@ -3,6 +3,7 @@ var url = require('url');
 var fs = require('fs');
 
 var Store;
+var messages;
 
 var time_inc = function(from) {
     return from + 1;
@@ -400,12 +401,12 @@ var parse = function(obj) {
 
 
 function Searcher(store) {
-    
+
     this.port = 0;
     this.store = store
-    
+
     this.error_handler = function() {};
-    
+
     this.server = http.createServer(function(request, response) {
         response.writeHead(200, {
             'Content-Type' : 'text/event-stream',
@@ -503,7 +504,8 @@ Searcher.prototype.start = function(port) {
     this.server.listen(this.port);
 }
 
-module.exports = function(store) {
-    Store = store
+module.exports = function(store_class, message_protobuf) {
+    Store = store_class;
+    messages = message_protobuf;
     return new Searcher();
 }

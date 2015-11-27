@@ -170,7 +170,7 @@ if (WRITER_PORT > 0)
     acceptor.listen(WRITER_PORT);
 
 if (SEARCHER_PORT > 0) {
-    var searcher = require('./searcher')(Store);
+    var searcher = require('./searcher')(Store, messages);
     searcher.error_handler = err_handler;
     searcher.start(SEARCHER_PORT);
 }
