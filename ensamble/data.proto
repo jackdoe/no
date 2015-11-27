@@ -1,0 +1,25 @@
+message Ensamble_Payload {
+	required string data = 2;
+}
+
+message Ensamble_Header {
+	required uint64 node_id = 1;
+	
+	enum Type {
+		HELLO = 0;
+		BYE = 1;
+		TICK = 2;
+
+		MASTER_DISCOVER = 3;
+		MASTER_OFFER = 4;
+
+		MASTER_ELECT = 5;
+		MASTER_VOTE = 6;
+	}
+	required Type type = 2;
+}
+
+message Ensamble_Message {
+	required Ensamble_Header header = 1;
+	optional Ensamble_Payload payload = 2;
+}

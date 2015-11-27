@@ -15,8 +15,7 @@ var udp = dgram.createSocket('udp4');
 var path = require('path');
 var messages = protobuf(fs.readFileSync(path.resolve(__dirname, 'data.proto')));
 
-
-var ensamble = require('./ensamble.js');
+var ensamble = require('./ensamble');
 
 
 console.dir(ensamble);
