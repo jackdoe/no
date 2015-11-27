@@ -14,6 +14,7 @@ var dgram = require('dgram');
 var udp = dgram.createSocket('udp4');
 var path = require('path');
 var messages = protobuf(fs.readFileSync(path.resolve(__dirname, 'data.proto')));
+var tick=0;
 
 var ensamble = require('./ensamble');
 
@@ -37,10 +38,18 @@ if (argv.ensamble) {
     ensamble.load();
 }
 
+var MASTER = argv.master; // XXX: temp
+if (MASTER) {
+    setInterval(function(){ 
+        ensamble.broadcast_tick(++tick); 
+    }, 100);
+}
+
 var WCOUNTER = 0;
 var RCOUNTER = 0;
 var NAME_TO_STORE = {};
 var ROOT = argv.root || '/tmp/messages/';
+
 
 var WRITER_PORT = argv.writer || 8001;
 var NODE_ID = argv.node_id || 0;
