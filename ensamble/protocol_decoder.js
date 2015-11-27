@@ -12,7 +12,12 @@ Object.keys(messages.Ensamble_Header.Type).forEach(function(m){
 });
 
 
-function read_messages(socket) {
+function protocol_decoder() {
+	this.messages = messages;
+	this.message_types = message_types;
+}
+
+protocol_decoder.prototype.decode_socket = function(socket) {
 	// Identify this client
 	socket.name = socket.remoteAddress + ":" + socket.remotePort
 	
@@ -54,6 +59,4 @@ function read_messages(socket) {
 	});
 }
 
-read_messages.types = message_types;
-
-module.exports = read_messages;
+module.exports = new protocol_decoder();

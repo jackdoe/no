@@ -15,13 +15,7 @@ const EventEmitter = require('events');
 
 var Member = require("./member.js");
 
-var message_types = {}; 
-
-Object.keys(messages.Ensamble_Header.Type).forEach(function(m){
-	message_types[messages.Ensamble_Header.Type[m]] = m;
-});
-
-var read_messages = require('./protocol_decoder.js');
+var protocol_decoder = require('./protocol_decoder.js');
 
 function Me(ensamble, port) {
 	console.log("Starting ensamble listener");
@@ -81,7 +75,7 @@ Me.prototype.listener_function = function() {
 		socket.hello_received = false;
 		
 		//This is where we start ACTUALLY decoding messages coming over the wire!
-		read_messages(socket);
+		protocol_decoder.decode_socket(socket);
 	}
 };
 

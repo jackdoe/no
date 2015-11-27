@@ -8,7 +8,7 @@ var messages = protobuf(fs.readFileSync(path.resolve(__dirname, 'data.proto')));
 const util = require('util');
 const EventEmitter = require('events');
 
-var read_messages = require('./protocol_decoder.js');
+var protocol_decoder = require('./protocol_decoder.js');
 
 function Member(node, client) {
 	
@@ -49,7 +49,7 @@ Member.prototype.init_client = function(me, client) {
 Member.prototype.onMessage = function(message, socket) {
 	console.log("I got a decoded message from node: " + this.node);
 	
-	this.emit(read_messages.types[message.header.type], message);
+	this.emit(protocol_decoder.message_types[message.header.type], message);
 	
 	console.log(message);
 }
@@ -70,7 +70,7 @@ Member.prototype.open_connection = function() {
 	client.on('connect', function(conn) {
 		console.log('connection establ');
 		me.init_client(me, client);
-		read_messages(client);
+		protocol_decoder.decode_socket(client);
 
 		this.send("HELLO");
 		
