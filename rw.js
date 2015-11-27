@@ -14,11 +14,21 @@ var dgram = require('dgram');
 var udp = dgram.createSocket('udp4');
 var path = require('path');
 var messages = protobuf(fs.readFileSync(path.resolve(__dirname, 'data.proto')));
-var tick=0;
-
 var ensamble = require('./ensamble');
 
-console.dir(ensamble);
+var time_inc = function(from) {
+    return from + 1;
+}
+
+var time_dec = function(from) {
+    return from - 1;
+}
+
+var time = function() {
+    return Math.floor(Date.now() / 1000);
+}
+
+var tick = time();
 
 var argv = require('minimist')(process.argv.slice(2));
 
@@ -50,7 +60,7 @@ ensamble.on('TICK', function(message) {on_tick(message.payload.data);});
 
 var MASTER = argv.master; // XXX: temp
 
-var master_tick = 0;
+var master_tick = time();
 if (MASTER) {
     setInterval(function(){
         var tick_data = new Buffer(4);
@@ -59,7 +69,7 @@ if (MASTER) {
         
         on_tick(tick_data);
         ensamble.broadcast('TICK', tick_data);
-    }, 100);
+    }, 1000);
 }
 
 
@@ -106,21 +116,6 @@ var get_store_obj = function(time_id, cache) {
     if (!(time_id in cache))
         cache[time_id] = new Store(time_id)
     return cache[time_id];
-}
-
-var ts_to_id = function(ts) {
-    return Math.floor(ts);
-}
-var time = function() {
-    return ts_to_id(Math.floor(Date.now() / 1000));
-}
-
-var time_inc = function(from) {
-    return from + 1;
-}
-
-var time_dec = function(from) {
-    return from - 1;
 }
 
 function DocumentIdentifier() {
@@ -580,7 +575,7 @@ var acceptor = http.createServer(function(request, response) {
         try {
             var decoded = messages.Data.decode(body)
 
-            var t = time();
+            var t = tick;
 
             var s = get_store_obj(t, NAME_TO_STORE);
             var encoded = s.append(decoded);
