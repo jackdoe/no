@@ -15,7 +15,30 @@ var udp = dgram.createSocket('udp4');
 var path = require('path');
 var messages = protobuf(fs.readFileSync(path.resolve(__dirname, 'data.proto')));
 
+
+var ensamble = require('./ensamble.js');
+
+
+console.dir(ensamble);
+
 var argv = require('minimist')(process.argv.slice(2));
+
+ensamble.start(parseInt(argv.intercom));
+
+if(argv.ensamble) {
+	ensamble.reset();
+	
+	var ensamble_members = argv.ensamble.split(",");
+	ensamble_members.forEach(function(m) {
+		
+		ensamble.addMember("rw://" + m);
+	});
+	
+	ensamble.save();
+} else {
+	ensamble.load();
+}
+
 
 var WCOUNTER = 0;
 var RCOUNTER = 0;
@@ -549,4 +572,7 @@ setInterval(function() {
     console.log(time() + " written: " + WCOUNTER + "/s, searched: " + RCOUNTER + "/s, cleaned: " + cleaned);
     RCOUNTER = 0;
     WCOUNTER = 0;
+    
+    
+    console.log(Object.keys(ensamble.getMembers()));
 },1000);
