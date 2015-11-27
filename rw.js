@@ -192,7 +192,8 @@ setInterval(function() {
     cleaned = 0;
     // NAME_TO_STORE is only used for writers
     for ( var k in NAME_TO_STORE) {
-        if (k < time_dec(time())) {
+//XXX:  Here the "tick - 1" needs to be reconsidered... thorougly.
+        if (k < tick - 1) {
             console.log("cleaning up: " + k);
             NAME_TO_STORE[k].cleanup();
             delete NAME_TO_STORE[k];
