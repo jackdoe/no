@@ -38,12 +38,30 @@ if (argv.ensamble) {
     ensamble.load();
 }
 
+var on_tick = function(data) {
+    console.log(data);
+    var tick_id = data.readUInt32BE(0);
+    tick = tick_id;
+
+    console.log("I've set my time to: " + tick);
+}
+
+ensamble.on('TICK', function(message) {on_tick(message.payload.data);});
+
 var MASTER = argv.master; // XXX: temp
+
+var master_tick = 0;
 if (MASTER) {
-    setInterval(function(){ 
-        ensamble.broadcast_tick(++tick); 
+    setInterval(function(){
+        var tick_data = new Buffer(4);
+        tick_data.fill(0);
+        tick_data.writeUInt32BE(++master_tick,0)
+        
+        on_tick(tick_data);
+        ensamble.broadcast('TICK', tick_data);
     }, 100);
 }
+
 
 var WCOUNTER = 0;
 var RCOUNTER = 0;
@@ -561,7 +579,9 @@ var acceptor = http.createServer(function(request, response) {
     request.on('end', function() {
         try {
             var decoded = messages.Data.decode(body)
+
             var t = time();
+
             var s = get_store_obj(t, NAME_TO_STORE);
             var encoded = s.append(decoded);
             WCOUNTER++;

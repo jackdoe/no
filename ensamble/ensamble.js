@@ -149,6 +149,10 @@ Ensamble.prototype._addMember = function(member) {
         member.send("MASTER_OFFER", this.master);
     }.bind(this));
 
+    member.on("TICK", function(message){
+        this.emit("TICK", message);
+    }.bind(this));
+    
     member.send("MASTER_DISCOVER");
 
     this.members[member.getName()] = member;
@@ -173,14 +177,10 @@ Ensamble.prototype.addMember = function(node) {
     }
 }
 
-Ensamble.prototype.broadcast_tick = function(tick_time) {
-    var tick_data = new Buffer(4);
-    tick_data.fill(0);
-    tick_data.writeUInt32BE(tick_time,0)
-
+Ensamble.prototype.broadcast = function(type, data) {
     Object.keys(this.members).forEach(function(member_key) {;
         //console.log("Sending tick to " + this.members[member_key].node);
-        this.members[member_key].send('TICK',tick_data);
+        this.members[member_key].send(type, data);
     }.bind(this));
 
 }
