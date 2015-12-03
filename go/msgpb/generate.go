@@ -1,6 +1,6 @@
-package datapb
+package msgpb
 
 // make sure you have gogofast installed:
 //    go get github.com/gogo/protobuf/protoc-gen-gofast
 
-//go:generate protoc --gogofast_out=import_path=datapb:.  -I../.. ../../data.proto
+//go:generate protoc --gogofaster_out=import_path=msgpb:.  -I. msg.proto

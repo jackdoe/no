@@ -1,0 +1,14 @@
+message Message {
+    message Payload {
+        required bytes data = 1;
+        optional string id = 2 [default="default"];
+    }
+
+    message Header {
+        optional int64 time = 1;
+        repeated string tags = 2;
+    }
+
+    required Header header = 1;
+    repeated Payload frames = 2;
+}
