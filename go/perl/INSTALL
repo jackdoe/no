@@ -1,0 +1,11 @@
+sudo yum install protobuf.x86_64 protobuf-compiler.x86_64 protobuf-devel.x86_64
+sudo yum install gcc-c++.x86_64
+
+wget https://protobuf-perlxs.googlecode.com/files/protobuf-perlxs-1.1.tar.gz
+tar -zxvf protobuf-perlxs-1.1.tar.gz
+cd protobuf-perlxs-1.1
+./configure --with-protobuf=/usr/include/google/protobuf
+cp ./src/protoxs ~/bin/
+
+perl Makefile.PL
+make
