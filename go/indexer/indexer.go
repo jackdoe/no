@@ -165,7 +165,7 @@ func startUDPServer(hostport string, proc int, msgchs []chan<- msg, quit <-chan 
 			for op := int64(0); ; op++ {
 				if length, err := conn.Read(buf); err != nil {
 					if nerr, ok := err.(net.Error); ok && nerr.Timeout() == false {
-						log.Printf("UDP server [%d]: read error '%s'", id, err.Error())
+						log.Printf("UDP server [%d]: read error '%s'", id, err)
 					} else {
 						conn.SetReadDeadline(time.Now().Add(timeout))
 					}
@@ -173,7 +173,7 @@ func startUDPServer(hostport string, proc int, msgchs []chan<- msg, quit <-chan 
 					msg.buf = buf[:length]
 					msgchs[r.Intn(l)] <- msg
 					if err = <-done; err != nil {
-						log.Printf("UDP server [%d]: failed to process message '%s'", id, err.Error())
+						log.Printf("UDP server [%d]: failed to process message '%s'", id, err)
 					}
 				}
 
@@ -453,7 +453,7 @@ func indexWorker(proc int, e epoch, jobs []<-chan job, wg *sync.WaitGroup) {
 		buf4 := make([]byte, 4)
 		idxwr, err := jbs[0].dir.getIndexBufferedFile()
 		if err != nil {
-			log.Printf("index worker [%d]: failed to get index file %s", e, err.Error())
+			log.Printf("index worker [%d]: failed to get index file %s", e, err)
 			return
 		}
 
@@ -464,18 +464,18 @@ func indexWorker(proc int, e epoch, jobs []<-chan job, wg *sync.WaitGroup) {
 		dequeOffset := tagOffset + tagStringsSize
 
 		if _, err := idxwr.Write(putUint32(buf4, len(tagsArray))); err != nil {
-			log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
+			log.Printf("index worker [%d]: write IO failed: %s", e, err)
 			return
 		}
 
 		for _, t := range tagsArray {
 			if _, err := idxwr.Write(putUint32(buf4, tagOffset)); err != nil {
-				log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
+				log.Printf("index worker [%d]: write IO failed: %s", e, err)
 				return
 			}
 
 			if _, err := idxwr.Write(putUint32(buf4, dequeOffset)); err != nil {
-				log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
+				log.Printf("index worker [%d]: write IO failed: %s", e, err)
 				return
 			}
 
@@ -488,12 +488,12 @@ func indexWorker(proc int, e epoch, jobs []<-chan job, wg *sync.WaitGroup) {
 
 		for _, t := range tagsArray {
 			if err := idxwr.WriteByte(byte(len(t))); err != nil {
-				log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
+				log.Printf("index worker [%d]: write IO failed: %s", e, err)
 				return
 			}
 
 			if _, err := idxwr.WriteString(t); err != nil {
-				log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
+				log.Printf("index worker [%d]: write IO failed: %s", e, err)
 				return
 			}
 		}
@@ -501,7 +501,7 @@ func indexWorker(proc int, e epoch, jobs []<-chan job, wg *sync.WaitGroup) {
 		for _, t := range tagsArray {
 			d := tags[t]
 			if _, err := idxwr.Write(putUint32(buf4, d.size+2*d.partitions)); err != nil {
-				log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
+				log.Printf("index worker [%d]: write IO failed: %s", e, err)
 				return
 			}
 
@@ -510,18 +510,18 @@ func indexWorker(proc int, e epoch, jobs []<-chan job, wg *sync.WaitGroup) {
 				if di.partition != partition {
 					partition = di.partition
 					if _, err := idxwr.Write(putUint32(buf4, partition)); err != nil {
-						log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
+						log.Printf("index worker [%d]: write IO failed: %s", e, err)
 						return
 					}
 
 					if _, err := idxwr.Write(putUint32(buf4, di.partitionSize())); err != nil {
-						log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
+						log.Printf("index worker [%d]: write IO failed: %s", e, err)
 						return
 					}
 				}
 
 				if _, err := idxwr.Write(di.valsAsByteSlice()); err != nil {
-					log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
+					log.Printf("index worker [%d]: write IO failed: %s", e, err)
 					return
 				}
 			}
@@ -530,7 +530,7 @@ func indexWorker(proc int, e epoch, jobs []<-chan job, wg *sync.WaitGroup) {
 
 	log.Printf("index worker [%d]: finished processing", e)
 	if err := jbs[0].dir.rename(); err != nil {
-		log.Printf("index worker [%d]: failed to rename: %s", e, err.Error())
+		log.Printf("index worker [%d]: failed to rename: %s", e, err)
 	}
 }
 
