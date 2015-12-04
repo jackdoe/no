@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	pb "github.com/jackdoe/no/go/datapb"
+	pb "github.com/jackdoe/no/go/msgpb"
 )
 
 import _ "net/http/pprof"
@@ -116,7 +116,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 
-	data := pb.Data{}
+	data := pb.Message{}
 	for p, offsets := range v {
 		db, err := mcache.getDatabase(int(p), t)
 		if err != nil {
@@ -149,7 +149,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 
-				var payload []*pb.Payload
+				var payload []*pb.Message_Payload
 				for _, sub := range substreams {
 					for _, frame := range data.GetFrames() {
 						if frame.GetId() == sub {
@@ -192,7 +192,7 @@ func main() {
 		}()
 	}
 
-	os.MkdirAll(root, 0775)
+	os.MkdirAll(*root, 0775)
 	mcache = newmCache(*root, time.Hour, 2*time.Hour)
 
 	ipPort := fmt.Sprintf("%s:%d", *ip, *port)

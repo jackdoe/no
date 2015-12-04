@@ -464,18 +464,18 @@ func indexWorker(proc int, e epoch, jobs []<-chan job, wg *sync.WaitGroup) {
 		dequeOffset := tagOffset + tagStringsSize
 
 		if _, err := idxwr.Write(putUint32(buf4, len(tagsArray))); err != nil {
-			log.Printf("index worker [%d]: write IO failed", e, err.Error())
+			log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
 			return
 		}
 
 		for _, t := range tagsArray {
 			if _, err := idxwr.Write(putUint32(buf4, tagOffset)); err != nil {
-				log.Printf("index worker [%d]: write IO failed", e, err.Error())
+				log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
 				return
 			}
 
 			if _, err := idxwr.Write(putUint32(buf4, dequeOffset)); err != nil {
-				log.Printf("index worker [%d]: write IO failed", e, err.Error())
+				log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
 				return
 			}
 
@@ -488,12 +488,12 @@ func indexWorker(proc int, e epoch, jobs []<-chan job, wg *sync.WaitGroup) {
 
 		for _, t := range tagsArray {
 			if err := idxwr.WriteByte(byte(len(t))); err != nil {
-				log.Printf("index worker [%d]: write IO failed", e, err.Error())
+				log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
 				return
 			}
 
 			if _, err := idxwr.WriteString(t); err != nil {
-				log.Printf("index worker [%d]: write IO failed", e, err.Error())
+				log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
 				return
 			}
 		}
@@ -501,7 +501,7 @@ func indexWorker(proc int, e epoch, jobs []<-chan job, wg *sync.WaitGroup) {
 		for _, t := range tagsArray {
 			d := tags[t]
 			if _, err := idxwr.Write(putUint32(buf4, d.size+2*d.partitions)); err != nil {
-				log.Printf("index worker [%d]: write IO failed", e, err.Error())
+				log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
 				return
 			}
 
@@ -510,18 +510,18 @@ func indexWorker(proc int, e epoch, jobs []<-chan job, wg *sync.WaitGroup) {
 				if di.partition != partition {
 					partition = di.partition
 					if _, err := idxwr.Write(putUint32(buf4, partition)); err != nil {
-						log.Printf("index worker [%d]: write IO failed", e, err.Error())
+						log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
 						return
 					}
 
 					if _, err := idxwr.Write(putUint32(buf4, di.partitionSize())); err != nil {
-						log.Printf("index worker [%d]: write IO failed", e, err.Error())
+						log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
 						return
 					}
 				}
 
 				if _, err := idxwr.Write(di.valsAsByteSlice()); err != nil {
-					log.Printf("index worker [%d]: write IO failed", e, err.Error())
+					log.Printf("index worker [%d]: write IO failed: %s", e, err.Error())
 					return
 				}
 			}

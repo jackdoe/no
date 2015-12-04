@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 )
 
@@ -28,7 +29,7 @@ type dfile struct {
 }
 
 func newEpochDir(root string, epoch int64, partition int) *dir {
-	t := time.Unix(epoch, 0)
+	t := time.Unix(epoch, 0).UTC()
 	path := fmt.Sprintf("%s/%s/%02d/%d", root, t.Format("2006010215"), t.Minute(), t.Unix())
 	tmp := path + ".tmp"
 
@@ -62,6 +63,10 @@ func (d *dir) getDataFile() (df *dfile, err error) {
 	}
 
 	d.df = &dfile{f, int64(len(dataFileHeader)), make([]byte, 4)}
+	runtime.SetFinalizer(d.df, func(df *dfile) {
+		df.f.Close()
+	})
+
 	return d.df, nil
 }
 
@@ -76,6 +81,10 @@ func (d *dir) getIndexBufferedFile() (w *bufio.Writer, err error) {
 		os.Remove(fn)
 		return nil, err
 	}
+
+	runtime.SetFinalizer(f, func(f *os.File) {
+		f.Close()
+	})
 
 	return bufio.NewWriterSize(f, bufferSize), nil
 }

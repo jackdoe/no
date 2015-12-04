@@ -352,7 +352,7 @@ func buildIndexFile(root string, t time.Time) string {
 }
 
 func buildDatabaseFile(root string, t time.Time, partition int) string {
-	return fmt.Sprintf("%s%d.%d.data", buildPath(root, t), t.Unix(), partition)
+	return fmt.Sprintf("%s%d-%d.data", buildPath(root, t), t.Unix(), partition)
 }
 
 func byteArrayToInt(in []byte) (res int) {
