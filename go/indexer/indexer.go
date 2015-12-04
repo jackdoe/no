@@ -530,7 +530,7 @@ func indexWorker(proc int, e epoch, jobs []<-chan job, wg *sync.WaitGroup) {
 
 	log.Printf("index worker [%d]: finished processing", e)
 	if err := jbs[0].dir.rename(); err != nil {
-		log.Printf("index worker [%d]: failed to rename", e, err.Error())
+		log.Printf("index worker [%d]: failed to rename: %s", e, err.Error())
 	}
 }
 
