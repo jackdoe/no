@@ -1,0 +1,22 @@
+syntax = "proto2";
+
+service Indexer {
+    rpc IndexMessage (Message) returns (Response) {}
+}
+
+message Header {
+    optional int64 time = 1;
+    repeated string tags = 2;
+}
+
+message Frame {
+    required bytes data = 1;
+    optional string id = 2 [default="default"];
+}
+
+message Message {
+    required Header header = 1;
+    repeated Frame frames = 2;
+}
+
+message Response {}
