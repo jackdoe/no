@@ -20,7 +20,7 @@ var rootDir string
 type indexerServer struct{}
 
 func (isrv *indexerServer) IndexMessage(ctx context.Context, msg *pb.Message) (*pb.Response, error) {
-	// log.Println("new message")
+	log.Println("new message", msg)
 	return &pb.Response{}, nil
 }
 
