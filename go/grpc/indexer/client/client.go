@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,15 +16,6 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 )
-
-func shuffle(slc [][]byte) {
-	for i := 1; i < len(slc); i++ {
-		r := rand.Intn(i + 1)
-		if i != r {
-			slc[r], slc[i] = slc[i], slc[r]
-		}
-	}
-}
 
 func main() {
 	var proc = flag.Int("proc", 8, "parallelizm")
@@ -36,6 +28,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	hosts := strings.Split(*srv, ",")
 	files, _ := filepath.Glob(*path + "/*.srl")
 	log.Printf("reading %d files", len(files))
 
@@ -48,8 +41,6 @@ func main() {
 
 		content = append(content, c)
 	}
-
-	shuffle(content)
 
 	var total, bytes int64
 	go func(ch <-chan time.Time) {
@@ -64,15 +55,20 @@ func main() {
 	var wg sync.WaitGroup
 	send := func() {
 		defer wg.Done()
+		src := rand.NewSource(time.Now().UnixNano())
+		rnd := rand.New(src)
 
-		log.Println("connection to", *srv)
-		conn, err := grpc.Dial(*srv, grpc.WithInsecure())
-		defer conn.Close()
-		if err != nil {
-			log.Fatal("failed to connect", err)
+		var clients []pb.IndexerClient
+		for _, host := range hosts {
+			log.Println("connection to", host)
+			conn, err := grpc.Dial(host, grpc.WithInsecure())
+			defer conn.Close()
+			if err != nil {
+				log.Fatal("failed to connect", err)
+			}
+
+			clients = append(clients, pb.NewIndexerClient(conn))
 		}
-
-		client := pb.NewIndexerClient(conn)
 
 		var msg pb.Message
 		var frame pb.Frame
@@ -80,10 +76,12 @@ func main() {
 		msg.Frames = append(msg.Frames, &frame)
 
 		for {
-			for _, c := range content {
+			for _ = range content {
+				c := content[rnd.Intn(len(content))]
+				client := clients[rnd.Intn(len(hosts))]
+
 				frame.Data = c
-				_, err = client.IndexMessage(context.Background(), &msg)
-				if err != nil {
+				if _, err := client.IndexMessage(context.Background(), &msg); err != nil {
 					log.Println("failed to send message", err)
 				}
 
