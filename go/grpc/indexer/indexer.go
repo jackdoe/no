@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -23,7 +24,10 @@ import (
 	pb "github.com/jackdoe/no/go/grpc/indexer/api"
 	fb "github.com/jackdoe/no/go/grpc/indexer/format"
 
+	_ "expvar"
 	_ "net/http/pprof"
+
+	"golang.org/x/net/trace"
 
 	"golang.org/x/net/context"
 )
@@ -43,8 +47,10 @@ type indexBuilderMessage struct {
 }
 
 type indexDumperMessage struct {
-	index reverseIndex
-	t     time.Time
+	index   reverseIndex
+	t       time.Time
+	msgs    int
+	offsets int
 }
 
 type indexerServer struct {
@@ -53,6 +59,8 @@ type indexerServer struct {
 }
 
 func (isrv *indexerServer) IndexMessage(ctx context.Context, msg *pb.Message) (*pb.Response, error) {
+	statIncrementCnt(&stat.msgCnt)
+
 	tags := msg.Header.GetTags()
 	if len(tags) > maxTagsInMessage {
 		return nil, fmt.Errorf("too many tags in message %d", len(tags))
@@ -71,39 +79,42 @@ func (isrv *indexerServer) IndexMessage(ctx context.Context, msg *pb.Message) (*
 		}
 	}
 
-	uuid := msg.Header.GetUuid()
+	start := time.Now()
 	value, err := msg.Marshal()
+	statIncrementTook(&stat.msgSerializeTook, start)
+	statIncrementSize(&stat.msgSendToKafkaSize, len(value))
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal message: %v", err)
 	}
 
-	start := time.Now()
+	start = time.Now()
+	// partition, offset := int32(0), int64(0)
 	partition, offset, err := isrv.producer.SendMessage(&sarama.ProducerMessage{
 		Topic: persistedTopic,
-		Key:   sarama.StringEncoder(uuid),
 		Value: sarama.ByteEncoder(value),
 	})
+
+	statIncrementTook(&stat.msgSendToKafkaTook, start)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to store message: %v", err)
 	}
 
-	statIncrementTook(&stat.sendMessageTook, start)
-	statIncrementSize(&stat.sendMessageSize, len(value))
-
-	// partition, offset := int32(0), int64(0)
+	start = time.Now()
 	isrv.appendIndexCh <- &indexBuilderMessage{
 		tags:      tags,
 		partition: partition,
 		offset:    offset,
 	}
 
+	statIncrementTook(&stat.msgSendToChTook, start)
 	return &pb.Response{}, nil
 }
 
-func newKafkaClient(brokerList []string, hostname string) (sarama.Client, error) {
+func newKafkaClient(proc int, brokerList []string, hostname string) (sarama.Client, error) {
 	config := sarama.NewConfig()
-	config.Net.MaxOpenRequests = 16
+	config.Net.MaxOpenRequests = proc * 2
 	config.Producer.Retry.Max = 10
 	config.Producer.RequiredAcks = sarama.WaitForAll
 	// config.Producer.Compression = sarama.CompressionGZIP
@@ -122,31 +133,31 @@ func newKafkaClient(brokerList []string, hostname string) (sarama.Client, error)
 	return cl, nil
 }
 
-func startIndexBuilder(dumperCh chan<- *indexDumperMessage, tickCh <-chan time.Time, wg *sync.WaitGroup) chan<- *indexBuilderMessage {
+func startIndexBuilder(proc int, dumperCh chan<- *indexDumperMessage, tickCh <-chan time.Time, wg *sync.WaitGroup) chan<- *indexBuilderMessage {
 	wg.Add(1)
-	builderCh := make(chan *indexBuilderMessage, 1)
+	builderCh := make(chan *indexBuilderMessage, proc*2)
 
 	go func() {
 		defer wg.Done()
-		var elapsed int64
 		index := make(reverseIndex)
-		cnt := 0
+		offsets := 0
+		msgs := 0
 
 		for {
 			select {
 			case t := <-tickCh:
-				log.Printf("index builder: got new tick for %d, collected %d messages, took %d ms", t.Unix(), cnt, elapsed/1000000)
-				dumperCh <- &indexDumperMessage{index, t.UTC()}
+				// log.Printf("index builder: got new tick for %d, collected %d messages", t.Unix(), msgs)
+				dumperCh <- &indexDumperMessage{index, t.UTC(), msgs, offsets}
 				index = make(reverseIndex)
-				elapsed = 0
-				cnt = 0
+				offsets = 0
+				msgs = 0
 
 			case msg := <-builderCh:
 				if msg == nil {
 					log.Printf("exiting index builder")
 					t := <-tickCh
-					log.Printf("index builder: got new tick for %d, collected %d messages, took %d ms", t.Unix(), cnt, elapsed/1000000)
-					dumperCh <- &indexDumperMessage{index, t.UTC()}
+					log.Printf("index builder: got new tick for %d, collected %d messages", t.Unix(), msgs)
+					dumperCh <- &indexDumperMessage{index, t.UTC(), msgs, offsets}
 					close(dumperCh)
 					return
 				}
@@ -167,10 +178,11 @@ func startIndexBuilder(dumperCh chan<- *indexDumperMessage, tickCh <-chan time.T
 					}
 
 					d.Append(msg.offset)
-					cnt++
+					offsets++
 				}
 
-				elapsed += time.Since(start).Nanoseconds()
+				msgs++
+				statIncrementTook(&stat.msgAppendToIdxTook, start)
 			}
 		}
 	}()
@@ -184,6 +196,8 @@ func startIndexDumper(producer sarama.SyncProducer, wg *sync.WaitGroup) chan<- *
 
 	go func() {
 		defer wg.Done()
+		buf8 := make([]byte, 8)
+		builder := flatbuffers.NewBuilder(1024 * 1024)
 
 		for {
 			msg := <-ch
@@ -194,25 +208,17 @@ func startIndexDumper(producer sarama.SyncProducer, wg *sync.WaitGroup) chan<- *
 
 			start := time.Now()
 			t, index := msg.t, msg.index
-			log.Printf("index dumper got index for %d (%s)", t.Unix(), t.String())
+			// log.Printf("index dumper got index for %d", t.Unix())
 
-			bytes := 0
-			total := 0
 			var tags []string
-			for tag, partitions := range index {
+			for tag := range index {
 				tags = append(tags, tag)
-
-				bytes += len(tag)
-				for _, d := range partitions {
-					total += d.size
-					bytes += d.size * flatbuffers.SizeInt64
-				}
 			}
 
 			sort.Strings(tags)
 
+			builder.Reset()
 			var fbtags []flatbuffers.UOffsetT
-			builder := flatbuffers.NewBuilder(bytes)
 
 			for _, tag := range tags {
 				name := builder.CreateString(tag)
@@ -247,25 +253,27 @@ func startIndexDumper(producer sarama.SyncProducer, wg *sync.WaitGroup) chan<- *
 			fb.IndexAddTags(builder, tagsVector)
 			builder.Finish(fb.IndexEnd(builder))
 
-			buf := builder.FinishedBytes()
+			encoded := builder.FinishedBytes()
+			binary.LittleEndian.PutUint64(buf8, uint64(t.Unix()))
 
-			startSend := time.Now()
+			statIncrementTook(&stat.idxSerializeTook, start)
+			statIncrementSize(&stat.idxSendToKafkaSize, len(encoded))
+
+			start = time.Now()
 			_, _, err := producer.SendMessage(&sarama.ProducerMessage{
 				Topic: indexTopic,
-				Key:   sarama.StringEncoder(t.String()),
-				Value: sarama.ByteEncoder(buf),
+				Key:   sarama.ByteEncoder(buf8),
+				Value: sarama.ByteEncoder(encoded),
 			})
+
+			statIncrementTook(&stat.idxSendToKafkaTook, start)
 
 			if err != nil {
 				log.Printf("failed to store message: %v", err)
 			}
 
-			statIncrementTook(&stat.sendIndexTook, startSend)
-			statIncrementSize(&stat.sendIndexSize, len(buf))
-
-			elapsed := time.Since(start)
-			log.Printf("finished serializing index for %d, %d tags, %d offsets, size %db, took: %d ms",
-				t.Unix(), len(tags), total, len(buf), elapsed.Nanoseconds()/1000000)
+			// log.Printf("finished serializing index for %d, %d msgs, %d tags, %d offsets",
+			// t.Unix(), msg.msgs, len(tags), msg.offsets)
 		}
 	}()
 
@@ -273,6 +281,7 @@ func startIndexDumper(producer sarama.SyncProducer, wg *sync.WaitGroup) chan<- *
 }
 
 func main() {
+	var proc = flag.Int("proc", 16, "max concurency")
 	var srv = flag.String("srv", "0.0.0.0:8004", "server socket")
 	var netprofile = flag.Bool("netprofile", false, "open socket for remote profiling")
 	var brokers = flag.String("brokers", "./brokers", "file containing Kafka brokers to connect to")
@@ -280,6 +289,9 @@ func main() {
 
 	if *netprofile {
 		go func() {
+			trace.AuthRequest = func(req *http.Request) (any, sensitive bool) {
+				return true, true
+			}
 			addr := "0.0.0.0:6061"
 			log.Println("start debug HTTP server", addr)
 			log.Println(http.ListenAndServe(addr, nil))
@@ -299,7 +311,7 @@ func main() {
 	brokerList := strings.Split(string(brokerContent), "\n")
 	log.Printf("kafka brokers: %s", strings.Join(brokerList, ", "))
 
-	kafkaClient, err := newKafkaClient(brokerList, hostname)
+	kafkaClient, err := newKafkaClient(*proc, brokerList, hostname)
 	if err != nil {
 		log.Fatalf("failed to connect to kafka: %v", err)
 	}
@@ -313,7 +325,7 @@ func main() {
 	wg := &sync.WaitGroup{}
 	tickCh := time.Tick(time.Second)
 	indexDumperCh := startIndexDumper(indexProducer, wg)
-	indexBuilderCh := startIndexBuilder(indexDumperCh, tickCh, wg)
+	indexBuilderCh := startIndexBuilder(*proc, indexDumperCh, tickCh, wg)
 
 	log.Println("listen to", *srv)
 	conn, err := net.Listen("tcp", *srv)
@@ -321,7 +333,7 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer(grpc.MaxConcurrentStreams(16))
+	grpcServer := grpc.NewServer(grpc.MaxConcurrentStreams(uint32(*proc)))
 	pb.RegisterIndexerServer(grpcServer, &indexerServer{dataProducer, indexBuilderCh})
 
 	c := make(chan os.Signal, 1)
