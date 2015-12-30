@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/Shopify/sarama"
 	"github.com/google/flatbuffers/go"
 	pb "github.com/jackdoe/no/go/grpc/indexer/api"
@@ -24,7 +26,6 @@ import (
 	_ "net/http/pprof"
 
 	"golang.org/x/net/context"
-	"google.golang.org/grpc"
 )
 
 const anyTag = "ANY"
@@ -100,21 +101,25 @@ func (isrv *indexerServer) IndexMessage(ctx context.Context, msg *pb.Message) (*
 	return &pb.Response{}, nil
 }
 
-func newProducer(brokerList []string) sarama.SyncProducer {
+func newKafkaClient(brokerList []string, hostname string) (sarama.Client, error) {
 	config := sarama.NewConfig()
 	config.Net.MaxOpenRequests = 16
 	config.Producer.Retry.Max = 10
 	config.Producer.RequiredAcks = sarama.WaitForAll
-	config.Producer.Partitioner = sarama.NewRoundRobinPartitioner
 	// config.Producer.Compression = sarama.CompressionGZIP
 	// config.Producer.Flush.MaxMessages = 10000
 
-	producer, err := sarama.NewSyncProducer(brokerList, config)
+	cl, err := sarama.NewClient(brokerList, config)
 	if err != nil {
-		log.Fatalln("Failed to start Sarama producer:", err)
+		return nil, err
 	}
 
-	return producer
+	partitionerCreator := func(topic string) sarama.Partitioner {
+		return newLocalAwarePartitioner(cl, topic, hostname)
+	}
+
+	config.Producer.Partitioner = partitionerCreator
+	return cl, nil
 }
 
 func startIndexBuilder(dumperCh chan<- *indexDumperMessage, tickCh <-chan time.Time, wg *sync.WaitGroup) chan<- *indexBuilderMessage {
@@ -282,7 +287,9 @@ func main() {
 	}
 
 	statInit()
+	hostname, _ := os.Hostname()
 	log.Println("GOMAXPROCS", runtime.GOMAXPROCS(0))
+	log.Println("hostname", hostname)
 
 	brokerContent, err := ioutil.ReadFile(*brokers)
 	if err != nil {
@@ -292,12 +299,20 @@ func main() {
 	brokerList := strings.Split(string(brokerContent), "\n")
 	log.Printf("kafka brokers: %s", strings.Join(brokerList, ", "))
 
-	producer := newProducer(brokerList)
-	defer producer.Close()
+	kafkaClient, err := newKafkaClient(brokerList, hostname)
+	if err != nil {
+		log.Fatalf("failed to connect to kafka: %v", err)
+	}
+
+	defer kafkaClient.Close()
+	dataProducer, _ := sarama.NewSyncProducerFromClient(kafkaClient)
+	defer dataProducer.Close()
+	indexProducer, _ := sarama.NewSyncProducerFromClient(kafkaClient)
+	defer indexProducer.Close()
 
 	wg := &sync.WaitGroup{}
 	tickCh := time.Tick(time.Second)
-	indexDumperCh := startIndexDumper(producer, wg)
+	indexDumperCh := startIndexDumper(indexProducer, wg)
 	indexBuilderCh := startIndexBuilder(indexDumperCh, tickCh, wg)
 
 	log.Println("listen to", *srv)
@@ -307,7 +322,7 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer(grpc.MaxConcurrentStreams(16))
-	pb.RegisterIndexerServer(grpcServer, &indexerServer{producer, indexBuilderCh})
+	pb.RegisterIndexerServer(grpcServer, &indexerServer{dataProducer, indexBuilderCh})
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
@@ -318,6 +333,7 @@ func main() {
 	}()
 
 	grpcServer.Serve(conn)
+	time.Sleep(100 * time.Millisecond) // let gRPC's goroutines to complete
 	close(indexBuilderCh)
 
 	log.Println("waiting completion of goroutines")
