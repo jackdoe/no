@@ -75,6 +75,7 @@ func (isrv *indexerServer) IndexMessage(ctx context.Context, msg *pb.Message) (*
 		return nil, fmt.Errorf("failed to marshal message: %v", err)
 	}
 
+	start := time.Now()
 	partition, offset, err := isrv.producer.SendMessage(&sarama.ProducerMessage{
 		Topic: persistedTopic,
 		Key:   sarama.StringEncoder(uuid),
@@ -84,6 +85,9 @@ func (isrv *indexerServer) IndexMessage(ctx context.Context, msg *pb.Message) (*
 	if err != nil {
 		return nil, fmt.Errorf("failed to store message: %v", err)
 	}
+
+	statIncrementTook(&stat.sendMessageTook, start)
+	statIncrementSize(&stat.sendMessageSize, len(value))
 
 	// partition, offset := int32(0), int64(0)
 	isrv.appendIndexCh <- &indexBuilderMessage{
@@ -235,6 +239,8 @@ func startIndexDumper(wg *sync.WaitGroup) chan<- *indexDumperMessage {
 
 			buf := builder.FinishedBytes()
 
+			statIncrementSize(&stat.sendIndexSize, len(buf))
+
 			// _, _, err := isrv.producer.SendMessage(&sarama.ProducerMessage{
 			// Topic: indexTopic,
 			// Key:   sarama.StringEncoder(t.Unix()),
@@ -268,6 +274,8 @@ func main() {
 		}()
 	}
 
+	statInit()
+
 	wg := &sync.WaitGroup{}
 	tickCh := time.Tick(time.Second)
 	indexDumperCh := startIndexDumper(wg)
@@ -291,7 +299,7 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.MaxConcurrentStreams(3))
 	pb.RegisterIndexerServer(grpcServer, &indexerServer{producer, indexBuilderCh})
 
 	c := make(chan os.Signal, 1)
