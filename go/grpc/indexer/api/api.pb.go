@@ -35,13 +35,21 @@ var _ = fmt.Errorf
 var _ = math.Inf
 
 type Header struct {
-	Time int64    `protobuf:"varint,1,opt,name=time" json:"time"`
-	Tags []string `protobuf:"bytes,2,rep,name=tags" json:"tags,omitempty"`
+	Uuid string   `protobuf:"bytes,1,req,name=uuid" json:"uuid"`
+	Time int64    `protobuf:"varint,2,opt,name=time" json:"time"`
+	Tags []string `protobuf:"bytes,3,rep,name=tags" json:"tags,omitempty"`
 }
 
 func (m *Header) Reset()         { *m = Header{} }
 func (m *Header) String() string { return proto.CompactTextString(m) }
 func (*Header) ProtoMessage()    {}
+
+func (m *Header) GetUuid() string {
+	if m != nil {
+		return m.Uuid
+	}
+	return ""
+}
 
 func (m *Header) GetTime() int64 {
 	if m != nil {
@@ -59,14 +67,14 @@ func (m *Header) GetTags() []string {
 
 type Frame struct {
 	Data []byte  `protobuf:"bytes,1,req,name=data" json:"data"`
-	Id   *string `protobuf:"bytes,2,opt,name=id,def=default" json:"id,omitempty"`
+	Name *string `protobuf:"bytes,2,opt,name=name,def=default" json:"name,omitempty"`
 }
 
 func (m *Frame) Reset()         { *m = Frame{} }
 func (m *Frame) String() string { return proto.CompactTextString(m) }
 func (*Frame) ProtoMessage()    {}
 
-const Default_Frame_Id string = "default"
+const Default_Frame_Name string = "default"
 
 func (m *Frame) GetData() []byte {
 	if m != nil {
@@ -75,11 +83,11 @@ func (m *Frame) GetData() []byte {
 	return nil
 }
 
-func (m *Frame) GetId() string {
-	if m != nil && m.Id != nil {
-		return *m.Id
+func (m *Frame) GetName() string {
+	if m != nil && m.Name != nil {
+		return *m.Name
 	}
-	return Default_Frame_Id
+	return Default_Frame_Name
 }
 
 type Message struct {
@@ -195,12 +203,16 @@ func (m *Header) MarshalTo(data []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	data[i] = 0x8
+	data[i] = 0xa
+	i++
+	i = encodeVarintApi(data, i, uint64(len(m.Uuid)))
+	i += copy(data[i:], m.Uuid)
+	data[i] = 0x10
 	i++
 	i = encodeVarintApi(data, i, uint64(m.Time))
 	if len(m.Tags) > 0 {
 		for _, s := range m.Tags {
-			data[i] = 0x12
+			data[i] = 0x1a
 			i++
 			l = len(s)
 			for l >= 1<<7 {
@@ -237,11 +249,11 @@ func (m *Frame) MarshalTo(data []byte) (int, error) {
 		i = encodeVarintApi(data, i, uint64(len(m.Data)))
 		i += copy(data[i:], m.Data)
 	}
-	if m.Id != nil {
+	if m.Name != nil {
 		data[i] = 0x12
 		i++
-		i = encodeVarintApi(data, i, uint64(len(*m.Id)))
-		i += copy(data[i:], *m.Id)
+		i = encodeVarintApi(data, i, uint64(len(*m.Name)))
+		i += copy(data[i:], *m.Name)
 	}
 	return i, nil
 }
@@ -336,6 +348,8 @@ func encodeVarintApi(data []byte, offset int, v uint64) int {
 func (m *Header) Size() (n int) {
 	var l int
 	_ = l
+	l = len(m.Uuid)
+	n += 1 + l + sovApi(uint64(l))
 	n += 1 + sovApi(uint64(m.Time))
 	if len(m.Tags) > 0 {
 		for _, s := range m.Tags {
@@ -353,8 +367,8 @@ func (m *Frame) Size() (n int) {
 		l = len(m.Data)
 		n += 1 + l + sovApi(uint64(l))
 	}
-	if m.Id != nil {
-		l = len(*m.Id)
+	if m.Name != nil {
+		l = len(*m.Name)
 		n += 1 + l + sovApi(uint64(l))
 	}
 	return n
@@ -396,6 +410,7 @@ func sozApi(x uint64) (n int) {
 	return sovApi(uint64((x << 1) ^ uint64((int64(x) >> 63))))
 }
 func (m *Header) Unmarshal(data []byte) error {
+	var hasFields [1]uint64
 	l := len(data)
 	iNdEx := 0
 	for iNdEx < l {
@@ -425,6 +440,36 @@ func (m *Header) Unmarshal(data []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Uuid", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowApi
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				stringLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthApi
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Uuid = string(data[iNdEx:postIndex])
+			iNdEx = postIndex
+			hasFields[0] |= uint64(0x00000001)
+		case 2:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Time", wireType)
 			}
@@ -443,7 +488,7 @@ func (m *Header) Unmarshal(data []byte) error {
 					break
 				}
 			}
-		case 2:
+		case 3:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Tags", wireType)
 			}
@@ -486,6 +531,9 @@ func (m *Header) Unmarshal(data []byte) error {
 			}
 			iNdEx += skippy
 		}
+	}
+	if hasFields[0]&uint64(0x00000001) == 0 {
+		return github_com_gogo_protobuf_proto.NewRequiredNotSetError("uuid")
 	}
 
 	if iNdEx > l {
@@ -554,7 +602,7 @@ func (m *Frame) Unmarshal(data []byte) error {
 			hasFields[0] |= uint64(0x00000001)
 		case 2:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Id", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field Name", wireType)
 			}
 			var stringLen uint64
 			for shift := uint(0); ; shift += 7 {
@@ -580,7 +628,7 @@ func (m *Frame) Unmarshal(data []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			s := string(data[iNdEx:postIndex])
-			m.Id = &s
+			m.Name = &s
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex

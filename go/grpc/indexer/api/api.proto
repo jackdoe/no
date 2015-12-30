@@ -5,13 +5,14 @@ service Indexer {
 }
 
 message Header {
-    optional int64 time = 1;
-    repeated string tags = 2;
+    required string uuid = 1;
+    optional int64 time = 2;
+    repeated string tags = 3;
 }
 
 message Frame {
     required bytes data = 1;
-    optional string id = 2 [default="default"];
+    optional string name = 2 [default="default"];
 }
 
 message Message {

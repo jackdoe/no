@@ -1,0 +1,12 @@
+namespace format;
+
+table Tag {
+    name:string (key);
+    offsets:[long];
+}
+
+table Index {
+    tags:[Tag];
+}
+
+root_type Index;
