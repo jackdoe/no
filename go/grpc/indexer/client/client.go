@@ -2,9 +2,9 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
@@ -16,15 +16,27 @@ import (
 	"google.golang.org/grpc"
 )
 
+func shuffle(slc [][]byte) {
+	for i := 1; i < len(slc); i++ {
+		r := rand.Intn(i + 1)
+		if i != r {
+			slc[r], slc[i] = slc[i], slc[r]
+		}
+	}
+}
+
 func main() {
+	var proc = flag.Int("proc", 8, "parallelizm")
+	var srv = flag.String("srv", "localhost:8004", "destination host:port")
+	var path = flag.String("path", ".", "path_to_srl_files")
 	flag.Parse()
-	args := flag.Args()
-	if len(args) < 2 {
-		fmt.Println("usage `go run client.go localhost:8004 path_to_srl_files`")
+
+	if !flag.Parsed() {
+		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
-	files, _ := filepath.Glob(args[1] + "/*.srl")
+	files, _ := filepath.Glob(*path + "/*.srl")
 	log.Printf("reading %d files", len(files))
 
 	var content [][]byte
@@ -37,13 +49,24 @@ func main() {
 		content = append(content, c)
 	}
 
-	var total int64
+	shuffle(content)
+
+	var total, bytes int64
+	go func(ch <-chan time.Time) {
+		for {
+			<-ch
+			t := atomic.SwapInt64(&total, 0)
+			b := atomic.SwapInt64(&bytes, 0)
+			log.Printf("sent %d %d bytes", t, b)
+		}
+	}(time.Tick(time.Second))
+
 	var wg sync.WaitGroup
 	send := func() {
 		defer wg.Done()
 
-		log.Println("connection to", args[0])
-		conn, err := grpc.Dial(args[0], grpc.WithInsecure())
+		log.Println("connection to", *srv)
+		conn, err := grpc.Dial(*srv, grpc.WithInsecure())
 		defer conn.Close()
 		if err != nil {
 			log.Fatal("failed to connect", err)
@@ -56,29 +79,25 @@ func main() {
 		msg.Header = &pb.Header{Tags: []string{"a", "b", "c", "d", "e", "f"}}
 		msg.Frames = append(msg.Frames, &frame)
 
-		for _, c := range content {
-			frame.Data = c
-			_, err = client.IndexMessage(context.Background(), &msg)
-			if err != nil {
-				log.Fatal("failed to send message", err)
-			}
+		for {
+			for _, c := range content {
+				frame.Data = c
+				_, err = client.IndexMessage(context.Background(), &msg)
+				if err != nil {
+					log.Println("failed to send message", err)
+				}
 
-			atomic.AddInt64(&total, 1)
-			if atomic.LoadInt64(&total)%100 == 0 {
-				log.Printf("sent %d files", total)
+				atomic.AddInt64(&total, 1)
+				atomic.AddInt64(&bytes, int64(len(c)))
 			}
 		}
 	}
 
-	start := time.Now()
-	for {
-		for i := 0; i < 16; i++ {
-			wg.Add(1)
-			go send()
-		}
-
-		wg.Wait()
+	log.Printf("spawning %d goroutines", *proc)
+	for i := 0; i < *proc; i++ {
+		wg.Add(1)
+		go send()
 	}
 
-	log.Printf("sent %d messages in %.2fs", total, time.Since(start).Seconds())
+	wg.Wait()
 }
