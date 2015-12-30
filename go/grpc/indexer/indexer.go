@@ -113,10 +113,16 @@ func (isrv *indexerServer) IndexMessage(ctx context.Context, msg *pb.Message) (*
 }
 
 func newKafkaClient(proc int, brokerList []string, hostname string) (sarama.Client, error) {
+	sarama.MaxRequestSize = 100 * 1024 * 1024
+	sarama.MaxResponseSize = 100 * 1024 * 1024
+
 	config := sarama.NewConfig()
 	config.Net.MaxOpenRequests = proc * 2
-	config.Producer.Retry.Max = 10
+	config.Producer.MaxMessageBytes = int(sarama.MaxRequestSize)
 	config.Producer.RequiredAcks = sarama.WaitForAll
+	config.Producer.Partitioner = sarama.NewRandomPartitioner
+	config.Metadata.RefreshFrequency = 10 * time.Second
+	config.ClientID = "indexer"
 	// config.Producer.Compression = sarama.CompressionGZIP
 	// config.Producer.Flush.MaxMessages = 10000
 
@@ -125,11 +131,11 @@ func newKafkaClient(proc int, brokerList []string, hostname string) (sarama.Clie
 		return nil, err
 	}
 
-	partitionerCreator := func(topic string) sarama.Partitioner {
-		return newLocalAwarePartitioner(cl, topic, hostname)
-	}
+	// partitionerCreator := func(topic string) sarama.Partitioner {
+	// return newLocalAwarePartitioner(cl, topic, hostname)
+	// }
 
-	config.Producer.Partitioner = partitionerCreator
+	// config.Producer.Partitioner = partitionerCreator
 	return cl, nil
 }
 
@@ -333,7 +339,7 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer(grpc.MaxConcurrentStreams(uint32(*proc)))
+	grpcServer := grpc.NewServer(grpc.MaxConcurrentStreams(uint32(*proc * 2)))
 	pb.RegisterIndexerServer(grpcServer, &indexerServer{dataProducer, indexBuilderCh})
 
 	c := make(chan os.Signal, 1)

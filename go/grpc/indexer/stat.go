@@ -31,7 +31,7 @@ func statInit() {
 				// "\nSTAT msg: cnt %d serializeTook %dms sendToKafkaTook %dms sendToKafkaSize %.3fMB sendToChTook %dms\n"+
 				// "STAT prc: appendToIdxTook %dms\n"+
 				// "STAT idx: serializeTook %dms sendToKafkaTook %dms sendToKafkaSize %.3fMB\n",
-				"MSG: cnt %-5d srl %-4dms tokafka %-5dms size %.2fMB toch %-3dms PROC: append %-3dms IDX: srl %-3dms tokafka %-2dms size %.2fMB",
+				"MSG: cnt %-5d srl %4dms tokafka %5dms size %.2fMB toch %3dms PROC: append %3dms IDX: srl %3dms tokafka %2dms size %.2fMB",
 
 				getAndResetInt64(&stat.msgCnt),
 				getAndResetInt64(&stat.msgSerializeTook)/1000000,
