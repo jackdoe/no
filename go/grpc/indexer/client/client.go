@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pb "github.com/jackdoe/no/go/grpc/indexer/api"
@@ -23,49 +24,61 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Println("connection to", args[0])
-	conn, err := grpc.Dial(args[0], grpc.WithInsecure())
-	defer conn.Close()
-	if err != nil {
-		log.Fatal("failed to connect", err)
+	files, _ := filepath.Glob(args[1] + "/*.srl")
+	log.Printf("reading %d files", len(files))
+
+	var content [][]byte
+	for _, file := range files {
+		c, err := ioutil.ReadFile(file)
+		if err != nil {
+			log.Fatal("failed to read file", file, err)
+		}
+
+		content = append(content, c)
 	}
 
+	var total int64
 	var wg sync.WaitGroup
-	files, _ := filepath.Glob(args[1] + "/*.srl")
-	total, bytes := 0, 0
-
 	send := func() {
 		defer wg.Done()
+
+		log.Println("connection to", args[0])
+		conn, err := grpc.Dial(args[0], grpc.WithInsecure())
+		defer conn.Close()
+		if err != nil {
+			log.Fatal("failed to connect", err)
+		}
 
 		client := pb.NewIndexerClient(conn)
 
 		var msg pb.Message
-		msg.Header = &pb.Header{}
-		msg.Frames = append(msg.Frames, &pb.Frame{[]byte(""), nil})
+		var frame pb.Frame
+		msg.Header = &pb.Header{Tags: []string{"a", "b", "c", "d", "e", "f"}}
+		msg.Frames = append(msg.Frames, &frame)
 
-		for _, file := range files {
-			msg.Frames[0].Data, err = ioutil.ReadFile(file)
+		for _, c := range content {
+			frame.Data = c
 			_, err = client.IndexMessage(context.Background(), &msg)
 			if err != nil {
 				log.Fatal("failed to send message", err)
 			}
 
-			// total++
-			// bytes += len(msg.Frames[0].Data)
-			// if total%100 == 0 {
-			// log.Printf("sent %d files of size %d", total, bytes)
-			// }
+			atomic.AddInt64(&total, 1)
+			if atomic.LoadInt64(&total)%100 == 0 {
+				log.Printf("sent %d files", total)
+			}
 		}
 	}
 
 	start := time.Now()
+	for {
+		for i := 0; i < 3; i++ {
+			wg.Add(1)
+			go send()
+		}
 
-	for i := 0; i < 3; i++ {
-		wg.Add(1)
-		go send()
-		total += len(files)
+		wg.Wait()
 	}
 
-	wg.Wait()
-	log.Printf("sent %d messages of size %d in %.2fs", total, bytes, time.Since(start).Seconds())
+	log.Printf("sent %d messages in %.2fs", total, time.Since(start).Seconds())
 }
