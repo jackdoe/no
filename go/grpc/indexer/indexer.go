@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -101,8 +102,12 @@ func (isrv *indexerServer) IndexMessage(ctx context.Context, msg *pb.Message) (*
 
 func newProducer(brokerList []string) sarama.SyncProducer {
 	config := sarama.NewConfig()
-	config.Producer.RequiredAcks = sarama.WaitForLocal
+	config.Net.MaxOpenRequests = 16
 	config.Producer.Retry.Max = 10
+	config.Producer.RequiredAcks = sarama.WaitForAll
+	config.Producer.Partitioner = sarama.NewRoundRobinPartitioner
+	// config.Producer.Compression = sarama.CompressionGZIP
+	// config.Producer.Flush.MaxMessages = 10000
 
 	producer, err := sarama.NewSyncProducer(brokerList, config)
 	if err != nil {
@@ -168,7 +173,7 @@ func startIndexBuilder(dumperCh chan<- *indexDumperMessage, tickCh <-chan time.T
 	return builderCh
 }
 
-func startIndexDumper(wg *sync.WaitGroup) chan<- *indexDumperMessage {
+func startIndexDumper(producer sarama.SyncProducer, wg *sync.WaitGroup) chan<- *indexDumperMessage {
 	ch := make(chan *indexDumperMessage, 300) // 5 min
 	wg.Add(1)
 
@@ -239,17 +244,19 @@ func startIndexDumper(wg *sync.WaitGroup) chan<- *indexDumperMessage {
 
 			buf := builder.FinishedBytes()
 
+			startSend := time.Now()
+			_, _, err := producer.SendMessage(&sarama.ProducerMessage{
+				Topic: indexTopic,
+				Key:   sarama.StringEncoder(t.String()),
+				Value: sarama.ByteEncoder(buf),
+			})
+
+			if err != nil {
+				log.Printf("failed to store message: %v", err)
+			}
+
+			statIncrementTook(&stat.sendIndexTook, startSend)
 			statIncrementSize(&stat.sendIndexSize, len(buf))
-
-			// _, _, err := isrv.producer.SendMessage(&sarama.ProducerMessage{
-			// Topic: indexTopic,
-			// Key:   sarama.StringEncoder(t.Unix()),
-			// Value: sarama.ByteEncoder(buf),
-			// })
-
-			// if err != nil {
-			// log.Printf("failed to store message: %v", err)
-			// }
 
 			elapsed := time.Since(start)
 			log.Printf("finished serializing index for %d, %d tags, %d offsets, size %db, took: %d ms",
@@ -275,11 +282,7 @@ func main() {
 	}
 
 	statInit()
-
-	wg := &sync.WaitGroup{}
-	tickCh := time.Tick(time.Second)
-	indexDumperCh := startIndexDumper(wg)
-	indexBuilderCh := startIndexBuilder(indexDumperCh, tickCh, wg)
+	log.Println("GOMAXPROCS", runtime.GOMAXPROCS(0))
 
 	brokerContent, err := ioutil.ReadFile(*brokers)
 	if err != nil {
@@ -289,9 +292,13 @@ func main() {
 	brokerList := strings.Split(string(brokerContent), "\n")
 	log.Printf("kafka brokers: %s", strings.Join(brokerList, ", "))
 
-	// var producer *sarama.SyncProducer
 	producer := newProducer(brokerList)
 	defer producer.Close()
+
+	wg := &sync.WaitGroup{}
+	tickCh := time.Tick(time.Second)
+	indexDumperCh := startIndexDumper(producer, wg)
+	indexBuilderCh := startIndexBuilder(indexDumperCh, tickCh, wg)
 
 	log.Println("listen to", *srv)
 	conn, err := net.Listen("tcp", *srv)
@@ -299,7 +306,7 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer(grpc.MaxConcurrentStreams(3))
+	grpcServer := grpc.NewServer(grpc.MaxConcurrentStreams(16))
 	pb.RegisterIndexerServer(grpcServer, &indexerServer{producer, indexBuilderCh})
 
 	c := make(chan os.Signal, 1)

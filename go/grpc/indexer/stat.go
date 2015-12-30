@@ -9,6 +9,7 @@ import (
 type statType struct {
 	sendMessageTook int64
 	sendMessageSize int64
+	sendIndexTook   int64
 	sendIndexSize   int64
 }
 
@@ -19,9 +20,11 @@ func statInit() {
 	go func() {
 		for {
 			<-t
-			log.Printf("STAT\tsendMessageTook: %dms sendMessageSize: %.3fMB sendIndexSize: %.3fMB",
+			log.Printf("STAT sendMessageTook: %dms sendMessageSize: %.3fMB\n"+
+				"\t\t\t sendIndexTook: %dms sendIndexSize: %.3fMB\n",
 				getAndResetInt64(&stat.sendMessageTook)/1000000,
 				float64(getAndResetInt64(&stat.sendMessageSize))/1024/1024,
+				getAndResetInt64(&stat.sendIndexTook)/1000000,
 				float64(getAndResetInt64(&stat.sendIndexSize))/1024/1024,
 			)
 		}
